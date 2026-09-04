@@ -33,7 +33,7 @@ Host: your-worker.workers.dev
 ```json
 {
   "service": "FreeFormer",
-  "version": "1.0.0",
+  "version": "0.2.0",
   "status": "healthy",
   "timestamp": "2026-08-18T14:23:52.000Z"
 }

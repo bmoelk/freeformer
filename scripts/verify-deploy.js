@@ -137,7 +137,7 @@ async function verifyDeployment() {
 
     const { status, environment, version, config } = response.data;
 
-    console.log(`Service Status:  ✅ ${(status || 'healthy').toUpperCase()} (v${version || '1.0.0'})`);
+    console.log(`Service Status:  ✅ ${(status || 'healthy').toUpperCase()} (v${version || '0.2.0'})`);
     console.log(`Environment:     ${environment || 'production'}`);
     console.log(`------------------------------------------------------------------------`);
     console.log(`Core Storage Engine & Global Bindings:`);
