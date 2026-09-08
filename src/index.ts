@@ -207,7 +207,7 @@ app.get('/', (c) => {
 
     return c.json({
         service: 'FreeFormer',
-        version: '0.2.0',
+        version: '0.3.0',
         status: 'healthy',
         environment: c.env.ENVIRONMENT || 'production',
         logLevel: logger.getLevel(),

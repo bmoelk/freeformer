@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "FreeFormer Configuration Manifest",
   "description": "Single source of truth for all FreeFormer environment variables, secrets, and bindings",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "variables": [
     {
       "name": "ENVIRONMENT",
