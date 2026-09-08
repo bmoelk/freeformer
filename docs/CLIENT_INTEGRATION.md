@@ -140,8 +140,24 @@ form.addEventListener('freeformer:error', (e) => {
 | :--- | :--- | :--- |
 | `data-freeformer` | Unique form identifier *(Required)* | `data-freeformer="contact-form"` |
 | `data-freeformer-site` | Site ID or domain name. If omitted, automatically extracts current webpage hostname. | `data-freeformer-site="splitphase.io"` |
+| `data-freeformer-protected-fields` | Comma-separated list of field names/patterns omitted from email notifications (persisted in DB) | `data-freeformer-protected-fields="ssn,tax_id,utm_*"` |
 | `data-success-message` | Custom success message displayed above form | `data-success-message="Thank you! We'll reply shortly."` |
 | `data-redirect` | Optional URL redirect upon successful submission | `data-redirect="/thank-you"` |
+
+### File Attachments & Uploads
+
+FreeFormer natively supports file uploads via standard `<input type="file">` tags. Files are automatically validated (size limit default 10MB, safe MIME-types) and stored in your private Cloudflare R2 bucket:
+
+```html
+<form data-freeformer="job-application" data-freeformer-site="splitphase.io">
+  <input type="text" name="name" placeholder="Full Name" required />
+  <input type="email" name="email" placeholder="Email Address" required />
+  <input type="file" name="resume" accept=".pdf,.doc,.docx" required />
+  <button type="submit">Submit Application</button>
+</form>
+```
+Uploaded files are stored with namespaced keys and can only be accessed by authenticated staff via **Cloudflare Zero Trust** or automated webhook signed links.
+
 
 ---
 

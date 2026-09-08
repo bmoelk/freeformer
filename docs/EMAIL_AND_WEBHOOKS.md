@@ -63,39 +63,73 @@ FreeFormer automatically sanitizes system tokens (`cf-turnstile-response`, `turn
 | `{{#turnstileScore}}...{{/turnstileScore}}` | Conditional Turnstile spam score | `0.95` |
 | `{{#fields}} {{key}} : {{value}} {{/fields}}` | Sanitized array of user submission fields | `[ { key: "name", value: "Jane" } ]` |
 
+### Protected Form Fields (Email Security)
+
+Because email messages are transmitted across public mail relays and stored in plaintext inboxes, sensitive or noisy data should not be sent via email. 
+
+Fields defined in `PROTECTED_FIELDS` (or per-site `PROTECTED_FIELDS_${SITE_ID}`, or HTML `data-freeformer-protected-fields="ssn,tax_id,utm_*"`) are **omitted from notification emails** while remaining **100% securely preserved in encrypted D1/KV storage** and webhook payloads.
+
 ---
 
-## 3. Outbound Webhooks
+## 3. Outbound Universal Webhooks (Zapier, Make, n8n, Custom APIs)
 
-FreeFormer can trigger real-time HTTP POST webhooks on successful form submissions.
+FreeFormer dispatches standardized, battle-tested webhook payloads upon every successful form submission. This envelope format is natively compatible with **Webhooks by Zapier (Catch Hooks)**, **Make (Integromat)**, **n8n**, Slack, and custom backend APIs.
 
 ### Webhook Configuration
 
-* **Global Fallback**: Set `WEBHOOK_URL` via `npx wrangler secret put WEBHOOK_URL`.
-* **Per-Site Webhook**: Set `WEBHOOK_URL_${SITE_ID}` (e.g. `WEBHOOK_URL_MYSITE`) via `npx wrangler secret put WEBHOOK_URL_MYSITE`.
+* **Global Fallback**: Set `WEBHOOK_URL` in `wrangler.overrides.toml` or `npx wrangler secret put WEBHOOK_URL`.
+* **Per-Site Webhook**: Set `WEBHOOK_URL_${SITE_ID}` (e.g. `WEBHOOK_URL_SPLITPHASE_IO`).
+* **HMAC Signature Secret**: Set `WEBHOOK_SECRET` (or `WEBHOOK_SECRET_${SITE_ID}`).
 
 ### Webhook Payload Format
 
 ```json
 {
+  "event": "form_submission",
   "id": "sub_9a8b7c6d5e",
   "formId": "contact",
-  "siteId": "mysite",
+  "siteId": "splitphase.io",
+  "timestamp": "2026-09-04T10:00:00.000Z",
   "data": {
     "name": "Jane Doe",
     "email": "jane@example.com",
     "message": "Hello from FreeFormer!"
   },
+  "attachments": [
+    {
+      "filename": "requirements.pdf",
+      "size": 1048576,
+      "mimeType": "application/pdf",
+      "downloadUrl": "https://forms.splitphase.io/files/signed?key=...&token=...&expires=1788456000"
+    }
+  ],
   "metadata": {
     "ip": "203.0.113.195",
     "userAgent": "Mozilla/5.0...",
-    "timestamp": "2026-08-19T10:00:00.000Z",
     "turnstileScore": 1.0
   }
 }
 ```
 
+### Temporary Signed R2 Download URLs for Automation
+Because FreeFormer's Cloudflare R2 bucket is private and guarded by Cloudflare Zero Trust, third-party webhook processors (like Zapier) cannot log in interactively. FreeFormer automatically generates a short-lived HMAC-SHA256 signed download URL (`/files/signed?key=...&token=...&expires=...`, default TTL: 15 minutes) for each attachment, allowing Zapier or Make to upload files to Google Drive, Dropbox, or a CRM.
+
 ### Webhook HTTP Headers
 * `Content-Type: application/json`
-* `X-FreeFormer-Event: submission`
-* `X-FreeFormer-Signature: <API_KEY>` *(Included if `API_KEY` is configured for signature authentication)*
+* `X-FreeFormer-Event: form_submission`
+* `X-FreeFormer-Timestamp: <unix_timestamp>`
+* `X-FreeFormer-Signature: sha256=<hex_hmac>` *(Included when `WEBHOOK_SECRET` or `API_KEY` is configured)*
+
+### Webhook Testing (`POST /webhook-test`)
+Trigger a test event to verify your Zapier Catch Hook or webhook integration without submitting live forms:
+```http
+POST /webhook-test HTTP/1.1
+Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "siteId": "splitphase.io",
+  "webhookUrl": "https://hooks.zapier.com/hooks/catch/12345/abcdef/"
+}
+```
+

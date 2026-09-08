@@ -192,19 +192,61 @@
                     return;
                 }
 
+                // Resolve protected fields from dataset or config
+                const protectedRaw = form.dataset.freeformerProtectedFields ||
+                    form.dataset.protectedFields ||
+                    form.dataset.freeformerSensitiveFields ||
+                    form.dataset.sensitiveFields || '';
+                const protectedFields = protectedRaw
+                    ? protectedRaw.split(',').map(s => s.trim()).filter(Boolean)
+                    : (Array.isArray(this.config.protectedFields) ? this.config.protectedFields : []);
+
+                // Check if form contains any file inputs with selected files
+                let hasFiles = false;
+                for (const value of formData.values()) {
+                    if (typeof File !== 'undefined' && value instanceof File && value.name && value.size > 0) {
+                        hasFiles = true;
+                        break;
+                    }
+                }
+
                 // Submit to FreeFormer
-                const response = await fetch(`${this.config.workerUrl}/submit`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        formId: formId,
-                        siteId: siteId,
-                        turnstileToken: turnstileToken,
-                        data: data,
-                    }),
-                });
+                let response;
+                if (hasFiles) {
+                    const submissionBody = new FormData();
+                    submissionBody.append('formId', formId);
+                    submissionBody.append('siteId', siteId);
+                    submissionBody.append('turnstileToken', turnstileToken);
+                    for (const [key, value] of formData.entries()) {
+                        submissionBody.append(key, value);
+                    }
+                    const headers = {};
+                    if (protectedFields.length > 0) {
+                        headers['X-FreeFormer-Protected-Fields'] = protectedFields.join(',');
+                    }
+                    response = await fetch(`${this.config.workerUrl}/submit`, {
+                        method: 'POST',
+                        headers,
+                        body: submissionBody,
+                    });
+                } else {
+                    response = await fetch(`${this.config.workerUrl}/submit`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            ...(protectedFields.length > 0 ? { 'X-FreeFormer-Protected-Fields': protectedFields.join(',') } : {}),
+                        },
+                        body: JSON.stringify({
+                            formId: formId,
+                            siteId: siteId,
+                            turnstileToken: turnstileToken,
+                            data: data,
+                            options: {
+                                protectedFields: protectedFields.length > 0 ? protectedFields : undefined,
+                            },
+                        }),
+                    });
+                }
 
                 const result = await response.json();
 

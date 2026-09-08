@@ -5,10 +5,21 @@ import { storeSubmission, getSubmissions, getSubmission } from './storage';
 import { checkRateLimit } from './ratelimit';
 import { sendEmailNotification, type EmailConfig } from './email';
 import { createLogger, type Logger } from './logger';
+import { requireZeroTrustAuth } from './auth';
+import {
+    saveAttachmentToR2,
+    validateAttachment,
+    verifySignedDownloadToken,
+    getSandboxedFileHeaders,
+    type StoredAttachment,
+} from './files';
+import { buildWebhookPayload, dispatchWebhook } from './webhook';
+import { adminApp } from './admin';
 
 type Bindings = {
     KV?: KVNamespace;
     DB?: D1Database;
+    ATTACHMENTS?: R2Bucket;
     ENVIRONMENT?: string;
     LOG_LEVEL?: string;
     STORAGE_ENGINE?: string;
@@ -27,6 +38,13 @@ type Bindings = {
     MAILTRAP_INBOX_ID?: string;
     API_KEY?: string;
     WEBHOOK_URL?: string;
+    WEBHOOK_SECRET?: string;
+    PROTECTED_FIELDS?: string;
+    CF_ACCESS_ENABLED?: string;
+    CF_ACCESS_TEAM_DOMAIN?: string;
+    CF_ACCESS_AUD?: string;
+    SIGNED_URL_TTL_SECONDS?: string;
+    MAX_FILE_SIZE_MB?: string;
 };
 
 export function getSiteEnvVariants(prefix: string, siteId: string): string[] {
@@ -151,6 +169,9 @@ app.get('/', (c) => {
         'EMAIL_PROVIDER',
         'EMAIL_API_KEY',
         'WEBHOOK_URL',
+        'WEBHOOK_SECRET',
+        'PROTECTED_FIELDS',
+        'CF_ACCESS',
         'API_KEY',
         'RATE_LIMIT_ENABLED',
         'RATE_LIMIT_REQUESTS',
@@ -158,6 +179,8 @@ app.get('/', (c) => {
         'ALLOWED_ORIGINS',
         'ENVIRONMENT',
         'LOG_LEVEL',
+        'MAX_FILE_SIZE_MB',
+        'SIGNED_URL_TTL_SECONDS',
     ];
 
     const envObj = (c.env || {}) as Record<string, any>;
@@ -169,11 +192,13 @@ app.get('/', (c) => {
 
     const kvBound = !!(c.env.KV && typeof c.env.KV.get === 'function');
     const d1Bound = !!(c.env.DB && typeof c.env.DB.prepare === 'function');
+    const r2Bound = !!(c.env.ATTACHMENTS && typeof c.env.ATTACHMENTS.get === 'function');
 
     const configuredKeys = Array.from(new Set([
         ...stringKeys,
         ...(kvBound ? ['KV'] : []),
         ...(d1Bound ? ['DB'] : []),
+        ...(r2Bound ? ['ATTACHMENTS'] : []),
     ]));
 
     const storageEngine = (c.env.STORAGE_ENGINE || (d1Bound ? 'd1' : kvBound ? 'kv' : 'none')).toLowerCase();
@@ -192,11 +217,14 @@ app.get('/', (c) => {
             storage: storageConfigured ? storageEngine : 'none',
             kvBound,
             d1Bound,
+            attachmentsBound: r2Bound,
+            zeroTrustConfigured: !!(c.env.CF_ACCESS_TEAM_DOMAIN || c.env.CF_ACCESS_ENABLED === 'true'),
             emailProvider: c.env.EMAIL_PROVIDER || 'none',
             emailToConfigured: !!c.env.EMAIL_TO,
             emailFromConfigured: !!c.env.EMAIL_FROM,
             emailApiKeyConfigured: !!c.env.EMAIL_API_KEY,
             turnstileConfigured: !!c.env.TURNSTILE_SECRET_KEY,
+            webhookConfigured: !!c.env.WEBHOOK_URL,
             rateLimitEnabled: c.env.RATE_LIMIT_ENABLED === 'true',
             configuredKeys,
         },
@@ -239,6 +267,8 @@ app.post('/submit', async (c) => {
         let formId = '';
         let siteId = '';
         let data: Record<string, any> = {};
+        const clientProtectedFields: string[] = [];
+        const uploadedFiles: File[] = [];
 
         const contentType = c.req.header('content-type') || '';
 
@@ -249,17 +279,23 @@ app.post('/submit', async (c) => {
                 formId = body.formId || '';
                 siteId = body.siteId || '';
                 data = body.data || {};
+
+                if (body.options?.protectedFields && Array.isArray(body.options.protectedFields)) {
+                    clientProtectedFields.push(...body.options.protectedFields);
+                } else if (body.protectedFields && Array.isArray(body.protectedFields)) {
+                    clientProtectedFields.push(...body.protectedFields);
+                }
             } catch {
                 return c.json({ success: false, error: 'Malformed JSON payload' }, 400);
             }
         } else {
             // Parse application/x-www-form-urlencoded or multipart/form-data
-            const body = await c.req.parseBody();
+            const body = await c.req.parseBody({ all: true });
             turnstileToken = (body['cf-turnstile-response'] as string) || (body['turnstileToken'] as string) || '';
             formId = (body['formId'] as string) || (body['form_id'] as string) || (body['form'] as string) || 'contact';
             siteId = (body['siteId'] as string) || (body['site_id'] as string) || (body['site'] as string) || '';
 
-            // Extract remaining form inputs as submission data
+            // Extract remaining form inputs as submission data or files
             const extractedData: Record<string, any> = {};
             const reserved = new Set([
                 'cf-turnstile-response',
@@ -272,13 +308,43 @@ app.post('/submit', async (c) => {
                 'siteId',
                 'site_id',
                 'site',
+                '_protectedFields',
+                'protectedFields',
             ]);
+
             for (const [key, value] of Object.entries(body)) {
-                if (!reserved.has(key)) {
+                if (reserved.has(key)) {
+                    if ((key === '_protectedFields' || key === 'protectedFields') && typeof value === 'string') {
+                        const parsed = value.split(',').map((s) => s.trim()).filter(Boolean);
+                        clientProtectedFields.push(...parsed);
+                    }
+                    continue;
+                }
+
+                // Handle file attachments
+                if (Array.isArray(value)) {
+                    for (const item of value) {
+                        if (typeof File !== 'undefined' && item instanceof File) {
+                            if (item.size > 0) uploadedFiles.push(item);
+                        } else {
+                            if (!extractedData[key]) extractedData[key] = [];
+                            extractedData[key].push(item);
+                        }
+                    }
+                } else if (typeof File !== 'undefined' && value instanceof File) {
+                    if (value.size > 0) uploadedFiles.push(value);
+                } else {
                     extractedData[key] = value;
                 }
             }
             data = extractedData;
+        }
+
+        // Header protected fields
+        const headerProtected = c.req.header('x-freeformer-protected-fields') || c.req.header('x-protected-fields');
+        if (headerProtected) {
+            const parsed = headerProtected.split(',').map((s) => s.trim()).filter(Boolean);
+            clientProtectedFields.push(...parsed);
         }
 
         const isDevMock =
@@ -361,11 +427,52 @@ app.post('/submit', async (c) => {
             );
         }
 
+        // Pre-generate submissionId for R2 key namespacing
+        const submissionId = crypto.randomUUID();
+
+        // Validate and save file attachments (R2 Storage)
+        const maxFileSizeBytes = parseInt(c.env.MAX_FILE_SIZE_MB || '10', 10) * 1024 * 1024;
+        const storedAttachments: StoredAttachment[] = [];
+
+        if (uploadedFiles.length > 0) {
+            for (const file of uploadedFiles) {
+                const validation = validateAttachment(file, maxFileSizeBytes);
+                if (!validation.valid) {
+                    return c.json({ success: false, error: validation.error }, 400);
+                }
+            }
+
+            if (c.env.ATTACHMENTS) {
+                for (const file of uploadedFiles) {
+                    const stored = await saveAttachmentToR2(
+                        c.env.ATTACHMENTS,
+                        file,
+                        resolvedSiteId,
+                        formId,
+                        submissionId,
+                        logger
+                    );
+                    storedAttachments.push(stored);
+                }
+            } else {
+                logger.warn('Storage', 'Files uploaded but ATTACHMENTS R2 binding is not configured in Wrangler!');
+            }
+        }
+
+        // Resolve protected fields (combining client declaration and server env)
+        const envProtectedRaw = resolveSiteEnv(envRecord, 'PROTECTED_FIELDS', resolvedSiteId) ||
+            resolveSiteEnv(envRecord, 'EMAIL_PROTECTED_FIELDS', resolvedSiteId) ||
+            resolveSiteEnv(envRecord, 'SENSITIVE_FIELDS', resolvedSiteId) || '';
+        const envProtectedList = envProtectedRaw.split(',').map((s) => s.trim()).filter(Boolean);
+        const resolvedProtectedFields = Array.from(new Set([...clientProtectedFields, ...envProtectedList]));
+
         // Prepare submission data
         const submissionData = {
             formId,
             siteId: resolvedSiteId,
             data,
+            attachments: storedAttachments,
+            protectedFields: resolvedProtectedFields,
             metadata: {
                 ip: clientIP,
                 userAgent: c.req.header('user-agent') || 'unknown',
@@ -378,20 +485,19 @@ app.post('/submit', async (c) => {
         const storageEngine = (c.env.STORAGE_ENGINE || 'kv').toLowerCase();
 
         // Store submission according to configured engine
-        let submissionId = '';
         if (storageEngine === 'd1') {
             if (!c.env.DB) {
                 logger.error('Storage', "STORAGE_ENGINE is set to 'd1', but D1 database binding 'DB' is missing in Wrangler!");
             }
-            submissionId = await storeSubmission(submissionData, undefined, c.env.DB, logger);
+            await storeSubmission(submissionData, undefined, c.env.DB, logger);
         } else if (storageEngine === 'kv') {
             if (!c.env.KV) {
                 logger.error('Storage', "STORAGE_ENGINE is set to 'kv', but KV namespace binding 'KV' is missing in Wrangler!");
             }
-            submissionId = await storeSubmission(submissionData, c.env.KV, undefined, logger);
+            await storeSubmission(submissionData, c.env.KV, undefined, logger);
         } else {
             // 'none': process without persistence
-            submissionId = await storeSubmission(submissionData, undefined, undefined, logger);
+            await storeSubmission(submissionData, undefined, undefined, logger);
         }
 
         // Dynamic Per-Site Email & Webhook Resolution (supports domains, prefixes, and global fallbacks):
@@ -411,6 +517,7 @@ app.post('/submit', async (c) => {
             mailgunDomain: resolvedMailgunDomain,
             mailtrapInboxId: resolvedMailtrapInboxId,
             siteId: resolvedSiteId,
+            protectedFields: resolvedProtectedFields,
         };
 
         if (emailConfig.provider !== 'none') {
@@ -437,27 +544,23 @@ app.post('/submit', async (c) => {
             logger.debug('Email', `Provider resolved to "none" for siteId: "${resolvedSiteId}"`);
         }
 
-        // Send webhook (if configured)
+        // Send universal webhook (if configured)
         const webhookUrl = resolveSiteEnv(envRecord, 'WEBHOOK_URL', resolvedSiteId);
 
         if (webhookUrl) {
-            const webhookPromise = fetch(webhookUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-FreeFormer-Event': 'submission',
-                    'X-FreeFormer-Signature': c.env.API_KEY || '' // Simple auth if key exists
-                },
-                body: JSON.stringify({
-                    id: submissionId,
-                    ...submissionData,
-                    timestamp: new Date().toISOString()
-                })
-            }).then(res => {
-                if (!res.ok) logger.error('Webhook', `Webhook failed with status: ${res.status} ${res.statusText}`);
-            }).catch(err => {
+            const webhookSecret = resolveSiteEnv(envRecord, 'WEBHOOK_SECRET', resolvedSiteId) || c.env.API_KEY || '';
+            const signedUrlTtl = parseInt(c.env.SIGNED_URL_TTL_SECONDS || '900', 10);
+            const workerOrigin = new URL(c.req.url).origin;
+
+            const webhookPromise = buildWebhookPayload(
+                { ...submissionData, submissionId },
+                workerOrigin,
+                webhookSecret,
+                signedUrlTtl
+            ).then((payload) => dispatchWebhook(webhookUrl, payload, webhookSecret, logger))
+             .catch((err) => {
                 logger.error('Webhook', 'Webhook dispatch exception', err);
-            });
+             });
 
             c.executionCtx.waitUntil(webhookPromise);
         }
@@ -674,5 +777,133 @@ app.post('/email-test', async (c) => {
         );
     }
 });
+
+// Test webhook configuration (requires authentication)
+app.post('/webhook-test', requireZeroTrustAuth(), async (c) => {
+    const logger = createLogger(c.env as Record<string, string | undefined>);
+    try {
+        const body = (await c.req.json().catch(() => ({}))) as Record<string, any>;
+        const siteId = (body.siteId as string) || 'splitphase.io';
+        const formId = (body.formId as string) || 'contact';
+        const envRecord = c.env as Record<string, string | undefined>;
+        const webhookUrl = (body.webhookUrl as string) || resolveSiteEnv(envRecord, 'WEBHOOK_URL', siteId);
+        const webhookSecret = resolveSiteEnv(envRecord, 'WEBHOOK_SECRET', siteId) || c.env.API_KEY || '';
+
+        if (!webhookUrl) {
+            return c.json(
+                { success: false, error: 'No webhookUrl provided in payload or configured in WEBHOOK_URL environment variable' },
+                400
+            );
+        }
+
+        const workerOrigin = new URL(c.req.url).origin;
+        const testPayload = await buildWebhookPayload(
+            {
+                submissionId: 'test-' + Date.now(),
+                formId,
+                siteId,
+                data: body.data || {
+                    name: 'Alex Johnson',
+                    email: 'alex@example.com',
+                    company: 'Acme Corp',
+                    message: 'This is a test submission from FreeFormer to verify webhook integration.',
+                },
+                metadata: {
+                    ip: c.req.header('cf-connecting-ip') || '127.0.0.1',
+                    userAgent: c.req.header('user-agent') || 'FreeFormer-Webhook-Test',
+                    timestamp: new Date().toISOString(),
+                    turnstileScore: 1.0,
+                },
+            },
+            workerOrigin,
+            webhookSecret,
+            900
+        );
+        testPayload.event = 'test_submission';
+
+        const result = await dispatchWebhook(webhookUrl, testPayload, webhookSecret, logger);
+
+        return c.json(
+            {
+                success: result.success,
+                webhookUrl,
+                status: result.status,
+                error: result.error,
+                payload: testPayload,
+            },
+            result.success ? 200 : 502
+        );
+    } catch (error) {
+        logger.error('Webhook', 'Exception testing webhook', error);
+        return c.json(
+            {
+                success: false,
+                error: 'Internal server error',
+                details: error instanceof Error ? error.message : String(error),
+            },
+            500
+        );
+    }
+});
+
+// Signed file download endpoint (time-limited HMAC for automated webhooks / Zapier)
+app.get('/files/signed', async (c) => {
+    const key = c.req.query('key');
+    const expires = c.req.query('expires');
+    const token = c.req.query('token');
+    const secret = c.env.WEBHOOK_SECRET || c.env.API_KEY;
+
+    if (!key || !expires || !token || !secret) {
+        return c.json({ success: false, error: 'Invalid or missing signed download parameters' }, 400);
+    }
+
+    const isValid = await verifySignedDownloadToken(key, expires, token, secret);
+    if (!isValid) {
+        return c.json({ success: false, error: 'Invalid or expired download token' }, 403);
+    }
+
+    if (!c.env.ATTACHMENTS) {
+        return c.json({ success: false, error: 'ATTACHMENTS R2 bucket binding is not configured in Wrangler' }, 500);
+    }
+
+    const object = await c.env.ATTACHMENTS.get(key);
+    if (!object) {
+        return c.json({ success: false, error: 'File not found' }, 404);
+    }
+
+    const filename = key.split('/').pop() || 'file';
+    const mimeType = object.httpMetadata?.contentType || 'application/octet-stream';
+    return new Response(object.body, {
+        headers: getSandboxedFileHeaders(filename, mimeType),
+    });
+});
+
+// Zero-Trust protected file download/preview endpoint
+app.get('/files/:key{.*}', requireZeroTrustAuth(), async (c) => {
+    const key = c.req.param('key');
+    if (!key) {
+        return c.json({ success: false, error: 'File key is required' }, 400);
+    }
+
+    if (!c.env.ATTACHMENTS) {
+        return c.json({ success: false, error: 'ATTACHMENTS R2 bucket binding is not configured in Wrangler' }, 500);
+    }
+
+    const object = await c.env.ATTACHMENTS.get(key);
+    if (!object) {
+        return c.json({ success: false, error: 'File not found' }, 404);
+    }
+
+    const filename = key.split('/').pop() || 'file';
+    const mimeType = object.httpMetadata?.contentType || 'application/octet-stream';
+    return new Response(object.body, {
+        headers: getSandboxedFileHeaders(filename, mimeType),
+    });
+});
+
+// Mount Zero-Trust Admin UI
+app.use('/admin/*', requireZeroTrustAuth());
+app.use('/admin', requireZeroTrustAuth());
+app.route('/admin', adminApp);
 
 export default app;

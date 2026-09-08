@@ -206,6 +206,17 @@ All configuration parameters and secrets supported by FreeFormer are summarized 
 | `WEBHOOK_URL_${SITE_ID}` | Var/Secret | Optional | - | Per-site webhook POST URL (e.g. WEBHOOK_URL_MYSITE). |
 | `MAILGUN_DOMAIN` | Var/Secret | Required (EMAIL_PROVIDER is 'mailgun') | - | Mailgun sending domain (required when using Mailgun). |
 | `MAILTRAP_INBOX_ID` | Var/Secret | Required (Using Mailtrap Sandbox Testing Mode) | - | Mailtrap inbox identifier for sandbox testing mode. |
+| `PROTECTED_FIELDS` | Var | Optional | - | Global comma-separated list of form fields to protect from notification emails (supports wildcards, e.g. ssn,tax_id,utm_*,internal_*). |
+| `PROTECTED_FIELDS_${SITE_ID}` | Var | Optional | - | Per-site protected form fields list (e.g. PROTECTED_FIELDS_SPLITPHASE_IO). |
+| `WEBHOOK_SECRET` | Secret | Optional | - | Secret key used for HMAC-SHA256 payload signing and temporary signed R2 download tokens. |
+| `WEBHOOK_SECRET_${SITE_ID}` | Secret | Optional | - | Per-site webhook HMAC secret override. |
+| `CF_ACCESS_ENABLED` | Var | Optional | `false` | Enable Cloudflare Zero Trust authentication enforcement on admin and file endpoints (true / false). |
+| `CF_ACCESS_TEAM_DOMAIN` | Var | Optional | - | Cloudflare Access team domain for JWKS certificate verification (e.g. myteam.cloudflareaccess.com). |
+| `CF_ACCESS_TEAM_DOMAIN_${SITE_ID}` | Var | Optional | - | Per-site Cloudflare Access team domain override. |
+| `CF_ACCESS_AUD` | Secret | Optional | - | Expected Cloudflare Access Application Audience (AUD) tag. |
+| `CF_ACCESS_AUD_${SITE_ID}` | Secret | Optional | - | Per-site Cloudflare Access Application Audience (AUD) tag override. |
+| `SIGNED_URL_TTL_SECONDS` | Var | Optional | `900` | Expiration time in seconds for temporary signed R2 download URLs included in webhooks (e.g. 900 for 15 minutes). |
+| `MAX_FILE_SIZE_MB` | Var | Optional | `10` | Maximum allowed file upload size in megabytes for form attachments. |
 
 <!-- CONFIG_TABLE_END -->
 

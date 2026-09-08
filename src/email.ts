@@ -14,6 +14,7 @@ export interface EmailConfig {
   mailgunDomain?: string; // Required for Mailgun
   mailtrapInboxId?: string; // Required for Mailtrap (testing mode)
   siteId?: string;
+  protectedFields?: string[];
 }
 
 export interface FormSubmissionData {
@@ -21,6 +22,7 @@ export interface FormSubmissionData {
   siteId?: string;
   submissionId: string;
   data: Record<string, any>;
+  protectedFields?: string[];
   metadata: {
     ip: string;
     userAgent: string;
@@ -95,7 +97,7 @@ function sendViaConsole(
   config: EmailConfig,
   submission: FormSubmissionData
 ): { success: boolean } {
-  const sanitizedData = sanitizeSubmissionData(submission.data);
+  const sanitizedData = sanitizeSubmissionData(submission.data, submission.protectedFields);
 
   console.log(`
 ┌────────────────────────────────────────────────────────────────────────┐

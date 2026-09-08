@@ -5,11 +5,25 @@ export interface FormSubmission {
     formId: string;
     siteId: string;
     data: Record<string, any>;
+    attachments?: Array<{
+        filename: string;
+        key: string;
+        size: number;
+        mimeType: string;
+        uploadedAt: string;
+    }>;
     metadata: {
         ip: string;
         userAgent: string;
         timestamp: string;
         turnstileScore?: number;
+        attachments?: Array<{
+            filename: string;
+            key: string;
+            size: number;
+            mimeType: string;
+            uploadedAt: string;
+        }>;
     };
 }
 
@@ -29,9 +43,17 @@ export async function storeSubmission(
 ): Promise<string> {
     const submissionId = nanoid();
     const site = submission.siteId;
+    
+    // Ensure attachments are represented in metadata for D1 storage
+    const metadataWithAttachments = {
+        ...submission.metadata,
+        ...(submission.attachments ? { attachments: submission.attachments } : {}),
+    };
+
     const storedSubmission: StoredSubmission = {
         id: submissionId,
         ...submission,
+        metadata: metadataWithAttachments,
     };
 
     // Prefer D1 if available, fallback to KV
@@ -46,7 +68,7 @@ export async function storeSubmission(
                 submission.formId,
                 site,
                 JSON.stringify(submission.data),
-                JSON.stringify(submission.metadata),
+                JSON.stringify(metadataWithAttachments),
                 submission.metadata.timestamp
             )
             .run();
@@ -83,50 +105,95 @@ export async function storeSubmission(
 }
 
 /**
- * Get submissions for a specific form and site
+ * Get submissions with flexible form and site filters
  */
 export async function getSubmissions(
     kv: KVNamespace | undefined,
     db: D1Database | undefined,
-    formId: string,
-    siteId: string,
+    formId?: string,
+    siteId?: string,
     limit: number = 100,
     offset: number = 0
 ): Promise<StoredSubmission[]> {
     if (db) {
-        const query = `SELECT id, form_id, site_id, data, metadata, created_at
-         FROM submissions
-         WHERE form_id = ? AND site_id = ?
-         ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-        const params: any[] = [formId, siteId, limit, offset];
+        let query = `SELECT id, form_id, site_id, data, metadata, created_at FROM submissions`;
+        const conditions: string[] = [];
+        const params: any[] = [];
+
+        if (formId && formId.trim()) {
+            conditions.push(`form_id = ?`);
+            params.push(formId.trim());
+        }
+        if (siteId && siteId.trim()) {
+            conditions.push(`site_id = ?`);
+            params.push(siteId.trim().toLowerCase());
+        }
+
+        if (conditions.length > 0) {
+            query += ` WHERE ` + conditions.join(' AND ');
+        }
+
+        query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
+        params.push(limit, offset);
 
         const result = await db.prepare(query).bind(...params).all();
 
-        return result.results.map((row: any) => ({
-            id: row.id,
-            formId: row.form_id,
-            siteId: row.site_id,
-            data: JSON.parse(row.data),
-            metadata: JSON.parse(row.metadata),
-        }));
+        return result.results.map((row: any) => {
+            const metadata = JSON.parse(row.metadata || '{}');
+            return {
+                id: row.id,
+                formId: row.form_id,
+                siteId: row.site_id,
+                data: JSON.parse(row.data || '{}'),
+                metadata,
+                attachments: metadata.attachments || [],
+            };
+        });
     } else if (kv) {
-        const indexKey = `index:${siteId}:${formId}`;
-        const index = (await kv.get(indexKey, 'json')) as string[] | null;
+        const cleanSite = siteId ? siteId.trim().toLowerCase() : '';
+        const cleanForm = formId ? formId.trim() : '';
 
-        if (!index) return [];
+        if (cleanSite && cleanForm) {
+            const indexKey = `index:${cleanSite}:${cleanForm}`;
+            const index = (await kv.get(indexKey, 'json')) as string[] | null;
+            if (!index) return [];
 
-        const submissionIds = index.slice(offset, offset + limit);
+            const submissionIds = index.slice(offset, offset + limit);
+            const submissions: StoredSubmission[] = [];
+
+            for (const id of submissionIds) {
+                const key = `submission:${cleanSite}:${cleanForm}:${id}`;
+                const submission = (await kv.get(key, 'json')) as StoredSubmission | null;
+                if (submission) {
+                    submissions.push({
+                        ...submission,
+                        attachments: submission.attachments || submission.metadata?.attachments || [],
+                    });
+                }
+            }
+            return submissions;
+        }
+
+        // Prefix list fallback
+        const prefix = cleanSite ? `submission:${cleanSite}:` : 'submission:';
+        const list = await kv.list({ prefix, limit: Math.min(limit + offset, 1000) });
         const submissions: StoredSubmission[] = [];
 
-        for (const id of submissionIds) {
-            const key = `submission:${siteId}:${formId}:${id}`;
-            const submission = (await kv.get(key, 'json')) as StoredSubmission | null;
+        for (const key of list.keys) {
+            if (cleanForm) {
+                const parts = key.name.split(':');
+                if (parts[2] !== cleanForm) continue;
+            }
+            const submission = (await kv.get(key.name, 'json')) as StoredSubmission | null;
             if (submission) {
-                submissions.push(submission);
+                submissions.push({
+                    ...submission,
+                    attachments: submission.attachments || submission.metadata?.attachments || [],
+                });
             }
         }
 
-        return submissions;
+        return submissions.slice(offset, offset + limit);
     }
 
     return [];
@@ -154,19 +221,26 @@ export async function getSubmission(
 
         if (!result) return null;
 
+        const metadata = JSON.parse(result.metadata as string || '{}');
         return {
             id: result.id as string,
             formId: result.form_id as string,
             siteId: result.site_id as string,
-            data: JSON.parse(result.data as string),
-            metadata: JSON.parse(result.metadata as string),
+            data: JSON.parse(result.data as string || '{}'),
+            metadata,
+            attachments: metadata.attachments || [],
         };
     } else if (kv) {
         // Fast direct path if siteId and formId are supplied
         if (siteId && formId) {
             const directKey = `submission:${siteId}:${formId}:${submissionId}`;
             const directSub = (await kv.get(directKey, 'json')) as StoredSubmission | null;
-            if (directSub) return directSub;
+            if (directSub) {
+                return {
+                    ...directSub,
+                    attachments: directSub.attachments || directSub.metadata?.attachments || [],
+                };
+            }
         }
 
         // Fallback scan by prefix
@@ -175,7 +249,12 @@ export async function getSubmission(
         for (const key of list.keys) {
             if (key.name.endsWith(`:${submissionId}`)) {
                 const submission = (await kv.get(key.name, 'json')) as StoredSubmission;
-                return submission;
+                if (submission) {
+                    return {
+                        ...submission,
+                        attachments: submission.attachments || submission.metadata?.attachments || [],
+                    };
+                }
             }
         }
     }

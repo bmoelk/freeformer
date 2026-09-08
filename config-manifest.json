@@ -170,6 +170,75 @@
         "rule": { "var": "EMAIL_PROVIDER", "equals": "mailtrap_sandbox" }
       },
       "description": "Mailtrap inbox identifier for sandbox testing mode."
+    },
+    {
+      "name": "PROTECTED_FIELDS",
+      "kind": "Var",
+      "required": false,
+      "description": "Global comma-separated list of form fields to protect from notification emails (supports wildcards, e.g. ssn,tax_id,utm_*,internal_*)."
+    },
+    {
+      "name": "PROTECTED_FIELDS_${SITE_ID}",
+      "kind": "Var",
+      "required": false,
+      "description": "Per-site protected form fields list (e.g. PROTECTED_FIELDS_SPLITPHASE_IO)."
+    },
+    {
+      "name": "WEBHOOK_SECRET",
+      "kind": "Secret",
+      "required": false,
+      "description": "Secret key used for HMAC-SHA256 payload signing and temporary signed R2 download tokens."
+    },
+    {
+      "name": "WEBHOOK_SECRET_${SITE_ID}",
+      "kind": "Secret",
+      "required": false,
+      "description": "Per-site webhook HMAC secret override."
+    },
+    {
+      "name": "CF_ACCESS_ENABLED",
+      "kind": "Var",
+      "required": false,
+      "default": "false",
+      "description": "Enable Cloudflare Zero Trust authentication enforcement on admin and file endpoints (true / false)."
+    },
+    {
+      "name": "CF_ACCESS_TEAM_DOMAIN",
+      "kind": "Var",
+      "required": false,
+      "description": "Cloudflare Access team domain for JWKS certificate verification (e.g. myteam.cloudflareaccess.com)."
+    },
+    {
+      "name": "CF_ACCESS_TEAM_DOMAIN_${SITE_ID}",
+      "kind": "Var",
+      "required": false,
+      "description": "Per-site Cloudflare Access team domain override."
+    },
+    {
+      "name": "CF_ACCESS_AUD",
+      "kind": "Secret",
+      "required": false,
+      "description": "Expected Cloudflare Access Application Audience (AUD) tag."
+    },
+    {
+      "name": "CF_ACCESS_AUD_${SITE_ID}",
+      "kind": "Secret",
+      "required": false,
+      "description": "Per-site Cloudflare Access Application Audience (AUD) tag override."
+    },
+    {
+      "name": "SIGNED_URL_TTL_SECONDS",
+      "kind": "Var",
+      "required": false,
+      "default": "900",
+      "description": "Expiration time in seconds for temporary signed R2 download URLs included in webhooks (e.g. 900 for 15 minutes)."
+    },
+    {
+      "name": "MAX_FILE_SIZE_MB",
+      "kind": "Var",
+      "required": false,
+      "default": "10",
+      "description": "Maximum allowed file upload size in megabytes for form attachments."
     }
   ]
 }

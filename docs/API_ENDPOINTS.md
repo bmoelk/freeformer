@@ -228,3 +228,53 @@ Authorization: Bearer YOUR_API_KEY
   "provider": "resend"
 }
 ```
+
+---
+
+### `GET /admin` & `GET /admin/submissions/:id` (Zero-Trust Admin Dashboard)
+
+Lightweight, server-rendered dashboard powered by `hono/html`. Protected by **Cloudflare Zero Trust** (`Cf-Access-Jwt-Assertion` header or `CF_Authorization` cookie) or Bearer `API_KEY`.
+
+- **`/admin`**: Lists submissions with multi-tenant site and form filters, pagination, Turnstile scores, and attachment indicators.
+- **`/admin/submissions/:id`**: Detailed submission inspector displaying full submitted payload (highlighting protected fields omitted from email), metadata, and direct R2 file preview/download links.
+
+---
+
+### `GET /files/:key*` (Secure Zero-Trust File Access)
+
+Streams stored attachments directly from private Cloudflare R2 bucket (`ATTACHMENTS`).
+Requires valid Cloudflare Zero Trust authentication or Bearer `API_KEY`.
+Always serves files with sandboxed security headers (`Content-Disposition: attachment`, `Content-Security-Policy: default-src 'none'; sandbox`, `X-Content-Type-Options: nosniff`).
+
+---
+
+### `GET /files/signed` (Automated Webhook File Access)
+
+Time-limited HMAC-signed file download endpoint for automated webhook consumers (e.g. Zapier, Make, n8n) that cannot log in interactively through Cloudflare Access.
+
+#### Query Parameters
+- `key`: The namespaced R2 file storage key
+- `expires`: UNIX timestamp of URL expiration
+- `token`: HMAC-SHA256 signature generated with `WEBHOOK_SECRET`
+
+---
+
+### `POST /webhook-test`
+
+Dispatches a simulated submission payload to test webhook receivers (Zapier Catch Hooks, Make, n8n, custom APIs).
+Requires valid Cloudflare Zero Trust session or Bearer `API_KEY`.
+
+#### Request
+```http
+POST /webhook-test HTTP/1.1
+Host: your-worker.workers.dev
+Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "siteId": "splitphase.io",
+  "formId": "contact",
+  "webhookUrl": "https://hooks.zapier.com/hooks/catch/..."
+}
+```
+
