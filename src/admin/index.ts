@@ -11,6 +11,8 @@ import type { AuthenticatedUser } from '../auth';
 import { getSubmissions, getSubmission, type StoredSubmission } from '../storage';
 import { isFieldProtected } from '../templates';
 import { resolveSiteEnv } from '../index';
+import { generateAndSendSpamDigest } from '../spam/digest';
+import { createLogger } from '../logger';
 
 type AdminBindings = {
   KV?: KVNamespace;
@@ -226,6 +228,7 @@ adminApp.get('/', async (c) => {
   const user = c.get('user');
   const siteId = c.req.query('siteId') || '';
   const formId = c.req.query('formId') || '';
+  const filter = (c.req.query('filter') || 'all') as 'all' | 'clean' | 'spam';
   const limit = parseInt(c.req.query('limit') || '50', 10);
   const offset = parseInt(c.req.query('offset') || '0', 10);
 
@@ -236,17 +239,25 @@ adminApp.get('/', async (c) => {
     formId,
     siteId,
     limit,
-    offset
+    offset,
+    filter
   );
 
   const content = html`
     <div class="card">
-      <h2 style="margin-top:0; font-size: 20px;">Form Submissions</h2>
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h2 style="margin: 0; font-size: 20px;">Form Submissions</h2>
+      </div>
       <form method="GET" action="/admin" class="filter-bar">
         <input type="text" name="siteId" placeholder="Filter by Site ID..." value="${siteId}">
         <input type="text" name="formId" placeholder="Filter by Form ID..." value="${formId}">
+        <select name="filter" onchange="this.form.submit()">
+          <option value="all" ${filter === 'all' ? 'selected' : ''}>Status: All</option>
+          <option value="clean" ${filter === 'clean' ? 'selected' : ''}>Inbox (Clean)</option>
+          <option value="spam" ${filter === 'spam' ? 'selected' : ''}>Quarantine (Spam)</option>
+        </select>
         <button type="submit" class="btn">Filter</button>
-        ${siteId || formId ? html`<a href="/admin" class="btn btn-secondary">Clear</a>` : ''}
+        ${siteId || formId || filter !== 'all' ? html`<a href="/admin" class="btn btn-secondary">Clear</a>` : ''}
       </form>
 
       ${submissions.length === 0
@@ -271,10 +282,11 @@ adminApp.get('/', async (c) => {
                 const primaryEmail = sub.data?.email || sub.data?.email_address || '';
                 const primary = [primaryName, primaryEmail].filter(Boolean).join(' • ') || '(No contact info)';
                 const attCount = sub.attachments?.length || 0;
-                const score = sub.metadata?.turnstileScore;
+                const spamInfo = sub.metadata?.spam;
+                const turnstileScore = sub.metadata?.turnstileScore;
 
                 return html`
-                  <tr>
+                  <tr style="${spamInfo?.isSpam ? 'background: rgba(239, 68, 68, 0.04);' : ''}">
                     <td style="white-space: nowrap; color: var(--text-muted);">${date}</td>
                     <td><span class="badge">${sub.siteId}</span></td>
                     <td><code>${sub.formId}</code></td>
@@ -285,8 +297,10 @@ adminApp.get('/', async (c) => {
                         : html`<span style="color:#64748b;">None</span>`}
                     </td>
                     <td>
-                      ${score !== undefined
-                        ? html`<span class="badge ${score >= 0.7 ? 'badge-success' : score >= 0.4 ? 'badge-warning' : 'badge-danger'}">${score.toFixed(2)}</span>`
+                      ${spamInfo
+                        ? html`<span class="badge ${spamInfo.isSpam ? 'badge-danger' : 'badge-success'}">${spamInfo.isSpam ? '🛡️ Spam' : '✓ Clean'} (${spamInfo.score})</span>`
+                        : turnstileScore !== undefined
+                        ? html`<span class="badge ${turnstileScore >= 0.7 ? 'badge-success' : turnstileScore >= 0.4 ? 'badge-warning' : 'badge-danger'}">${turnstileScore.toFixed(2)}</span>`
                         : html`<span style="color:#64748b;">-</span>`}
                     </td>
                     <td>
@@ -303,10 +317,10 @@ adminApp.get('/', async (c) => {
             </span>
             <div style="display: flex; gap: 8px;">
               ${offset > 0
-                ? html`<a href="/admin?siteId=${encodeURIComponent(siteId)}&formId=${encodeURIComponent(formId)}&offset=${Math.max(0, offset - limit)}&limit=${limit}" class="btn btn-secondary">Previous</a>`
+                ? html`<a href="/admin?siteId=${encodeURIComponent(siteId)}&formId=${encodeURIComponent(formId)}&filter=${filter}&offset=${Math.max(0, offset - limit)}&limit=${limit}" class="btn btn-secondary">Previous</a>`
                 : ''}
               ${submissions.length === limit
-                ? html`<a href="/admin?siteId=${encodeURIComponent(siteId)}&formId=${encodeURIComponent(formId)}&offset=${offset + limit}&limit=${limit}" class="btn btn-secondary">Next</a>`
+                ? html`<a href="/admin?siteId=${encodeURIComponent(siteId)}&formId=${encodeURIComponent(formId)}&filter=${filter}&offset=${offset + limit}&limit=${limit}" class="btn btn-secondary">Next</a>`
                 : ''}
             </div>
           </div>
@@ -434,6 +448,50 @@ adminApp.get('/submissions/:id', async (c) => {
 
       <!-- Right Column: Metadata & Security -->
       <div>
+        ${sub.metadata?.spam
+          ? html`
+            <div class="card" style="border-left: 4px solid ${sub.metadata.spam.isSpam ? 'var(--danger)' : 'var(--success)'};">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h3 style="margin: 0; font-size: 16px;">🛡️ Spam Analysis</h3>
+                <span class="badge ${sub.metadata.spam.isSpam ? 'badge-danger' : 'badge-success'}" style="font-size: 12px;">
+                  ${sub.metadata.spam.isSpam ? 'Quarantined (Spam)' : 'Passed (Clean)'}
+                </span>
+              </div>
+              <p style="font-size: 13px; margin: 0 0 12px 0; color: var(--text-muted); line-height: 1.6;">
+                <strong style="color: var(--text);">Score:</strong> <strong style="font-size: 16px; color: ${sub.metadata.spam.isSpam ? 'var(--danger)' : 'var(--success)'};">${sub.metadata.spam.score}/100</strong> (Threshold: ${sub.metadata.spam.threshold})<br>
+                <strong style="color: var(--text);">Engine Version:</strong> <code>v${sub.metadata.spam.engineVersion}</code>
+              </p>
+
+              ${sub.metadata.spam.reasons && sub.metadata.spam.reasons.length > 0
+                ? html`
+                  <div style="margin-bottom: 12px;">
+                    <div style="font-size: 11px; font-weight: 600; text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;">Evaluation Triggers:</div>
+                    <ul style="margin: 0; padding-left: 18px; font-size: 12px; color: #fca5a5; line-height: 1.5;">
+                      ${sub.metadata.spam.reasons.map((r: string) => html`<li>${r}</li>`)}
+                    </ul>
+                  </div>
+                `
+                : ''}
+
+              <details style="font-size: 12px; margin-top: 8px;">
+                <summary style="cursor: pointer; color: var(--primary); font-weight: 500;">Inspect Evaluation Metrics</summary>
+                <div style="background: #090d16; border: 1px solid var(--card-border); padding: 10px; border-radius: 6px; margin-top: 8px; font-family: monospace; font-size: 11px; line-height: 1.6; color: #94a3b8;">
+                  <div>Links Found: <span style="color: var(--text);">${sub.metadata.spam.metrics?.linkCount ?? 0}</span> (Density: <span style="color: var(--text);">${sub.metadata.spam.metrics?.linkDensity ?? 0}</span>)</div>
+                  <div>Honeypot: <span style="color: ${sub.metadata.spam.metrics?.hasHoneypot ? 'var(--danger)' : 'var(--text)'};">${sub.metadata.spam.metrics?.hasHoneypot ? '⚠️ Yes (' + sub.metadata.spam.metrics.honeypotFieldName + ')' : 'No'}</span></div>
+                  <div>Disposable Email: <span style="color: ${sub.metadata.spam.metrics?.disposableEmail ? 'var(--danger)' : 'var(--text)'};">${sub.metadata.spam.metrics?.disposableEmail ? '⚠️ Yes' : 'No'}</span></div>
+                  <div>Suspicious TLD: <span style="color: ${sub.metadata.spam.metrics?.suspiciousTld ? 'var(--danger)' : 'var(--text)'};">${sub.metadata.spam.metrics?.suspiciousTld ? '⚠️ Yes' : 'No'}</span></div>
+                  ${sub.metadata.spam.metrics?.turnstileElapsedSeconds !== undefined
+                    ? html`<div>Elapsed Time: <span style="color: var(--text);">${sub.metadata.spam.metrics.turnstileElapsedSeconds}s</span></div>`
+                    : ''}
+                  ${sub.metadata.spam.metrics?.keywordMatches && sub.metadata.spam.metrics.keywordMatches.length > 0
+                    ? html`<div>Matches: <span style="color: var(--danger);">${sub.metadata.spam.metrics.keywordMatches.join(', ')}</span></div>`
+                    : ''}
+                </div>
+              </details>
+            </div>
+          `
+          : ''}
+
         <div class="card">
           <h3 style="margin-top: 0; font-size: 16px;">Metadata & Verification</h3>
           <p style="font-size: 13px; line-height: 1.8; margin: 0; color: var(--text-muted);">
@@ -464,3 +522,34 @@ adminApp.get('/submissions/:id', async (c) => {
 
   return c.html(adminLayout(`Submission ${sub.id}`, user, content));
 });
+
+// 3. Spam Digest On-Demand Trigger / Diagnostic Endpoint
+adminApp.post('/spam-digest', async (c) => {
+  const logger = createLogger(c.env as Record<string, string | undefined>);
+  const dryRun = c.req.query('dryRun') === 'true';
+  const days = parseInt(c.req.query('days') || '7', 10);
+  const siteId = c.req.query('siteId') || undefined;
+
+  const emailConfig = {
+    provider: ((c.env.EMAIL_PROVIDER || 'none').toLowerCase()) as any,
+    apiKey: c.env.EMAIL_API_KEY || '',
+    from: c.env.EMAIL_FROM || '',
+    to: c.env.SPAM_DIGEST_EMAIL_TO || c.env.EMAIL_TO || '',
+    mailgunDomain: c.env.MAILGUN_DOMAIN,
+    mailtrapInboxId: c.env.MAILTRAP_INBOX_ID,
+    siteId,
+  };
+
+  const workerOrigin = new URL(c.req.url).origin;
+  const adminUrl = `${workerOrigin}/admin?filter=spam`;
+
+  const result = await generateAndSendSpamDigest(
+    { kv: c.env.KV, db: c.env.DB },
+    emailConfig,
+    { days, siteId, adminUrl, dryRun },
+    logger
+  );
+
+  return c.json(result);
+});
+

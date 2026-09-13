@@ -15,6 +15,9 @@ import {
 } from './files';
 import { buildWebhookPayload, dispatchWebhook } from './webhook';
 import { adminApp } from './admin';
+import { evaluateSpam } from './spam/detector';
+import { generateAndSendSpamDigest } from './spam/digest';
+import { type SpamAnalysisResult } from './spam/types';
 
 type Bindings = {
     KV?: KVNamespace;
@@ -30,6 +33,13 @@ type Bindings = {
     RATE_LIMIT_ENABLED?: string;
     RATE_LIMIT_REQUESTS?: string;
     RATE_LIMIT_WINDOW?: string;
+    SPAM_DETECTION_ENABLED?: string;
+    SPAM_THRESHOLD?: string;
+    SPAM_HONEYPOT_FIELDS?: string;
+    SPAM_KEYWORDS?: string;
+    SPAM_DIGEST_ENABLED?: string;
+    SPAM_DIGEST_SCHEDULE?: string;
+    SPAM_DIGEST_EMAIL_TO?: string;
     EMAIL_PROVIDER?: string;
     EMAIL_API_KEY?: string;
     EMAIL_FROM?: string;
@@ -181,6 +191,13 @@ app.get('/', (c) => {
         'LOG_LEVEL',
         'MAX_FILE_SIZE_MB',
         'SIGNED_URL_TTL_SECONDS',
+        'SPAM_DETECTION_ENABLED',
+        'SPAM_THRESHOLD',
+        'SPAM_HONEYPOT_FIELDS',
+        'SPAM_KEYWORDS',
+        'SPAM_DIGEST_ENABLED',
+        'SPAM_DIGEST_SCHEDULE',
+        'SPAM_DIGEST_EMAIL_TO',
     ];
 
     const envObj = (c.env || {}) as Record<string, any>;
@@ -226,6 +243,9 @@ app.get('/', (c) => {
             turnstileConfigured: !!c.env.TURNSTILE_SECRET_KEY,
             webhookConfigured: !!c.env.WEBHOOK_URL,
             rateLimitEnabled: c.env.RATE_LIMIT_ENABLED === 'true',
+            spamDetectionEnabled: c.env.SPAM_DETECTION_ENABLED !== 'false',
+            spamThreshold: parseInt(c.env.SPAM_THRESHOLD || '60', 10),
+            spamDigestEnabled: c.env.SPAM_DIGEST_ENABLED !== 'false',
             configuredKeys,
         },
         timestamp: new Date().toISOString(),
@@ -466,6 +486,53 @@ app.post('/submit', async (c) => {
         const envProtectedList = envProtectedRaw.split(',').map((s) => s.trim()).filter(Boolean);
         const resolvedProtectedFields = Array.from(new Set([...clientProtectedFields, ...envProtectedList]));
 
+        // Evaluate submission for spam (Honeypot, Velocity, Link Density, Keywords, Disposable Email)
+        const spamEnabled = resolveSiteEnv(envRecord, 'SPAM_DETECTION_ENABLED', resolvedSiteId) !== 'false' &&
+            c.env.SPAM_DETECTION_ENABLED !== 'false';
+
+        let spamAnalysis: SpamAnalysisResult | undefined;
+        let isSpam = false;
+
+        if (spamEnabled) {
+            const spamThresholdRaw = resolveSiteEnv(envRecord, 'SPAM_THRESHOLD', resolvedSiteId) || c.env.SPAM_THRESHOLD || '60';
+            const spamThreshold = parseInt(spamThresholdRaw, 10) || 60;
+
+            const honeypotFieldsRaw = resolveSiteEnv(envRecord, 'SPAM_HONEYPOT_FIELDS', resolvedSiteId) ||
+                c.env.SPAM_HONEYPOT_FIELDS || '';
+            const customHoneypots = honeypotFieldsRaw
+                ? honeypotFieldsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+                : undefined;
+
+            const customKeywordsRaw = resolveSiteEnv(envRecord, 'SPAM_KEYWORDS', resolvedSiteId) ||
+                c.env.SPAM_KEYWORDS || '';
+            const customKeywords = customKeywordsRaw
+                ? customKeywordsRaw.split(',').map((s) => s.trim()).filter(Boolean)
+                : undefined;
+
+            spamAnalysis = evaluateSpam(data, {
+                threshold: spamThreshold,
+                honeypotFields: customHoneypots,
+                customKeywords,
+                clientIp: clientIP,
+                turnstileResult,
+                requestTimestamp: Date.now(),
+            });
+
+            isSpam = spamAnalysis.isSpam;
+
+            if (isSpam) {
+                logger.warn(
+                    'Spam',
+                    `QUARANTINED | Site: "${resolvedSiteId}" | Score: ${spamAnalysis.score}/${spamAnalysis.threshold} | Reasons: [${spamAnalysis.reasons.join('; ')}]`
+                );
+            } else {
+                logger.debug(
+                    'Spam',
+                    `PASSED | Site: "${resolvedSiteId}" | Score: ${spamAnalysis.score}/${spamAnalysis.threshold}`
+                );
+            }
+        }
+
         // Prepare submission data
         const submissionData = {
             formId,
@@ -478,6 +545,9 @@ app.post('/submit', async (c) => {
                 userAgent: c.req.header('user-agent') || 'unknown',
                 timestamp: new Date().toISOString(),
                 turnstileScore: turnstileResult.score,
+                isSpam,
+                spamScore: spamAnalysis?.score,
+                spam: spamAnalysis,
             },
         };
 
@@ -508,7 +578,7 @@ app.post('/submit', async (c) => {
         const resolvedMailgunDomain = resolveSiteEnv(envRecord, 'MAILGUN_DOMAIN', resolvedSiteId);
         const resolvedMailtrapInboxId = resolveSiteEnv(envRecord, 'MAILTRAP_INBOX_ID', resolvedSiteId);
 
-        // Send email notification (if configured)
+        // Send email notification (if configured and not quarantined as spam)
         const emailConfig: EmailConfig = {
             provider: resolvedEmailProvider,
             apiKey: resolvedEmailApiKey,
@@ -520,7 +590,9 @@ app.post('/submit', async (c) => {
             protectedFields: resolvedProtectedFields,
         };
 
-        if (emailConfig.provider !== 'none') {
+        if (isSpam) {
+            logger.info('Email', `Suppressed: Submission ${submissionId} quarantined as spam (Score: ${spamAnalysis?.score}/${spamAnalysis?.threshold})`);
+        } else if (emailConfig.provider !== 'none') {
             if (!emailConfig.to || !emailConfig.from) {
                 logger.warn('Email', `Skipped: Missing EMAIL_TO ("${emailConfig.to}") or EMAIL_FROM ("${emailConfig.from}") for siteId: "${resolvedSiteId}"`);
             } else {
@@ -906,4 +978,41 @@ app.use('/admin/*', requireZeroTrustAuth());
 app.use('/admin', requireZeroTrustAuth());
 app.route('/admin', adminApp);
 
-export default app;
+// Export app for tests and router mounting
+export { app };
+
+// Cloudflare Workers entrypoint supporting HTTP fetch and Scheduled Events (crons)
+export default {
+    fetch: app.fetch,
+    async scheduled(event: ScheduledEvent, env: Bindings, ctx: ExecutionContext) {
+        const logger = createLogger(env as Record<string, string | undefined>);
+        logger.info('Cron', `Scheduled cron triggered: "${event.cron}" at ${new Date().toISOString()}`);
+
+        if (env.SPAM_DIGEST_ENABLED === 'false') {
+            logger.info('Cron', 'Spam digest is disabled via SPAM_DIGEST_ENABLED=false');
+            return;
+        }
+
+        const emailConfig: EmailConfig = {
+            provider: ((env.EMAIL_PROVIDER || 'none').toLowerCase()) as any,
+            apiKey: env.EMAIL_API_KEY || '',
+            from: env.EMAIL_FROM || '',
+            to: env.SPAM_DIGEST_EMAIL_TO || env.EMAIL_TO || '',
+            mailgunDomain: env.MAILGUN_DOMAIN,
+            mailtrapInboxId: env.MAILTRAP_INBOX_ID,
+        };
+
+        const result = await generateAndSendSpamDigest(
+            { kv: env.KV, db: env.DB },
+            emailConfig,
+            { days: 7 },
+            logger
+        );
+
+        logger.info(
+            'Cron',
+            `Spam digest execution completed: sent=${result.sent}, count=${result.count}, reason=${result.reason || 'ok'}`
+        );
+    },
+};
+

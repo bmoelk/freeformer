@@ -23,6 +23,12 @@ RATE_LIMIT_ENABLED = "false"
 RATE_LIMIT_REQUESTS = "10"
 RATE_LIMIT_WINDOW = "60"
 
+# Spam Detection Configuration
+SPAM_DETECTION_ENABLED = "true"
+SPAM_THRESHOLD = "60"
+SPAM_HONEYPOT_FIELDS = "_hp,website,company_url"
+SPAM_DIGEST_ENABLED = "true"
+
 # Default Storage Engine (options: kv, d1, none)
 STORAGE_ENGINE = "kv"
 
@@ -62,3 +68,7 @@ invocation_logs = true
 enabled = false
 persist = true
 head_sampling_rate = 1
+
+[triggers]
+crons = ["0 9 * * 1"]
+

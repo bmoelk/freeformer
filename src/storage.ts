@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid';
 import { type Logger } from './logger';
+import { type SpamAnalysisResult } from './spam/types';
 
 export interface FormSubmission {
     formId: string;
@@ -17,6 +18,9 @@ export interface FormSubmission {
         userAgent: string;
         timestamp: string;
         turnstileScore?: number;
+        isSpam?: boolean;
+        spamScore?: number;
+        spam?: SpamAnalysisResult;
         attachments?: Array<{
             filename: string;
             key: string;
@@ -24,6 +28,7 @@ export interface FormSubmission {
             mimeType: string;
             uploadedAt: string;
         }>;
+        [key: string]: any;
     };
 }
 
@@ -113,8 +118,15 @@ export async function getSubmissions(
     formId?: string,
     siteId?: string,
     limit: number = 100,
-    offset: number = 0
+    offset: number = 0,
+    spamFilter?: 'all' | 'clean' | 'spam'
 ): Promise<StoredSubmission[]> {
+    const filterFn = (sub: StoredSubmission) => {
+        if (!spamFilter || spamFilter === 'all') return true;
+        const isSpam = sub.metadata?.spam?.isSpam ?? sub.metadata?.isSpam ?? false;
+        return spamFilter === 'spam' ? isSpam : !isSpam;
+    };
+
     if (db) {
         let query = `SELECT id, form_id, site_id, data, metadata, created_at FROM submissions`;
         const conditions: string[] = [];
@@ -133,12 +145,15 @@ export async function getSubmissions(
             query += ` WHERE ` + conditions.join(' AND ');
         }
 
-        query += ` ORDER BY created_at DESC LIMIT ? OFFSET ?`;
-        params.push(limit, offset);
+        query += ` ORDER BY created_at DESC`;
+        if (!spamFilter || spamFilter === 'all') {
+            query += ` LIMIT ? OFFSET ?`;
+            params.push(limit, offset);
+        }
 
         const result = await db.prepare(query).bind(...params).all();
 
-        return result.results.map((row: any) => {
+        const allMapped: StoredSubmission[] = result.results.map((row: any) => {
             const metadata = JSON.parse(row.metadata || '{}');
             return {
                 id: row.id,
@@ -149,6 +164,12 @@ export async function getSubmissions(
                 attachments: metadata.attachments || [],
             };
         });
+
+        if (!spamFilter || spamFilter === 'all') {
+            return allMapped;
+        }
+
+        return allMapped.filter(filterFn).slice(offset, offset + limit);
     } else if (kv) {
         const cleanSite = siteId ? siteId.trim().toLowerCase() : '';
         const cleanForm = formId ? formId.trim() : '';
@@ -158,7 +179,8 @@ export async function getSubmissions(
             const index = (await kv.get(indexKey, 'json')) as string[] | null;
             if (!index) return [];
 
-            const submissionIds = index.slice(offset, offset + limit);
+            const fetchLimit = (!spamFilter || spamFilter === 'all') ? (offset + limit) : Math.min(index.length, 500);
+            const submissionIds = index.slice(0, fetchLimit);
             const submissions: StoredSubmission[] = [];
 
             for (const id of submissionIds) {
@@ -171,12 +193,12 @@ export async function getSubmissions(
                     });
                 }
             }
-            return submissions;
+            return submissions.filter(filterFn).slice(offset, offset + limit);
         }
 
         // Prefix list fallback
         const prefix = cleanSite ? `submission:${cleanSite}:` : 'submission:';
-        const list = await kv.list({ prefix, limit: Math.min(limit + offset, 1000) });
+        const list = await kv.list({ prefix, limit: Math.min(limit + offset + 200, 1000) });
         const submissions: StoredSubmission[] = [];
 
         for (const key of list.keys) {
@@ -193,7 +215,7 @@ export async function getSubmissions(
             }
         }
 
-        return submissions.slice(offset, offset + limit);
+        return submissions.filter(filterFn).slice(offset, offset + limit);
     }
 
     return [];
