@@ -49,6 +49,47 @@
       "description": "Duration of rate limit window in seconds."
     },
     {
+      "name": "SPAM_DETECTION_ENABLED",
+      "kind": "Var",
+      "required": false,
+      "default": "true",
+      "description": "Enable or disable edge-native spam scoring and quarantine (true / false)."
+    },
+    {
+      "name": "SPAM_THRESHOLD",
+      "kind": "Var",
+      "required": false,
+      "default": "60",
+      "description": "Spam score threshold (0-100). Submissions at or above this score are quarantined and instant email notifications are suppressed."
+    },
+    {
+      "name": "SPAM_HONEYPOT_FIELDS",
+      "kind": "Var",
+      "required": false,
+      "default": "_hp,website,company_url",
+      "description": "Comma-separated list of form field names treated as honeypot traps for bots."
+    },
+    {
+      "name": "SPAM_KEYWORDS",
+      "kind": "Var",
+      "required": false,
+      "default": "",
+      "description": "Optional comma-separated list of custom site-specific spam keywords to flag."
+    },
+    {
+      "name": "SPAM_DIGEST_ENABLED",
+      "kind": "Var",
+      "required": false,
+      "default": "true",
+      "description": "Enable weekly email summaries of quarantined spam submissions (true / false)."
+    },
+    {
+      "name": "SPAM_DIGEST_EMAIL_TO",
+      "kind": "Var/Secret",
+      "required": false,
+      "description": "Recipient email address for periodic spam digests (falls back to EMAIL_TO if omitted)."
+    },
+    {
       "name": "STORAGE_ENGINE",
       "kind": "Var",
       "required": true,

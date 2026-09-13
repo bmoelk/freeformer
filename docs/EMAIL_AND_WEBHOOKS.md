@@ -69,9 +69,33 @@ Because email messages are transmitted across public mail relays and stored in p
 
 Fields defined in `PROTECTED_FIELDS` (or per-site `PROTECTED_FIELDS_${SITE_ID}`, or HTML `data-freeformer-protected-fields="ssn,tax_id,utm_*"`) are **omitted from notification emails** while remaining **100% securely preserved in encrypted D1/KV storage** and webhook payloads.
 
+### Spam Quarantine & Instant Alert Suppression
+
+When incoming submissions score at or above `SPAM_THRESHOLD` (default: `60`):
+* **Immediate Email Suppression**: FreeFormer automatically suppresses instant email notification alerts to your inbox.
+* **Safe Persistence**: Submissions are safely saved to D1 or KV storage with full spam audit telemetry (`metadata.isSpam = true`, `metadata.spamScore`, `metadata.spam.reasons`, and `metadata.spam.metrics`).
+* **Zero Lost Leads**: False positives can be inspected in the FreeFormer Zero-Trust Admin dashboard (`/admin?filter=spam`).
+
 ---
 
-## 3. Outbound Universal Webhooks (Zapier, Make, n8n, Custom APIs)
+## 3. Periodic Spam Digest (Zero-Noise Summaries)
+
+Rather than sending noisy alerts for spam messages as they arrive, FreeFormer aggregates quarantined submissions and delivers a single **Weekly Spam Digest**:
+
+* **Zero-Noise Guarantee**: If no spam was detected during the period (`spamCount === 0`), **no email is sent**.
+* **Automated Cron Trigger**: Runs on a Cloudflare Workers cron schedule (`[triggers] crons = ["0 9 * * 1"]` for every Monday at 09:00 UTC).
+* **Digest Content**:
+  - High-level metric cards (Quarantined Spam count, Clean Forwarded count, Spam percentage).
+  - Summary table of all quarantined submissions with Sender, Site, Form, Spam Score, Top Reason, and Message snippet.
+  - Direct deep link to FreeFormer Admin UI (`/admin?filter=spam`).
+* **Configuration**:
+  - `SPAM_DIGEST_ENABLED`: Toggle digests (`"true"` / `"false"`).
+  - `SPAM_DIGEST_EMAIL_TO`: Specific recipient email for digests (falls back to `EMAIL_TO`).
+  - `POST /admin/spam-digest?dryRun=true`: Preview or trigger the digest on demand from curl or admin tools.
+
+---
+
+## 4. Outbound Universal Webhooks (Zapier, Make, n8n, Custom APIs)
 
 FreeFormer dispatches standardized, battle-tested webhook payloads upon every successful form submission. This envelope format is natively compatible with **Webhooks by Zapier (Catch Hooks)**, **Make (Integromat)**, **n8n**, Slack, and custom backend APIs.
 

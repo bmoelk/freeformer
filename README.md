@@ -12,7 +12,8 @@ FreeFormer provides a complete, edge-native backend for collecting form submissi
 
 ## ✨ Key Features
 
-* 🛡️ **Turnstile Integration** — Built-in spam protection using Cloudflare Turnstile (with local dev auto-mocking).
+* 🛡️ **Two-Tier Spam Protection** — Cloudflare Turnstile token validation paired with an edge-native heuristic spam engine (`v1.0.0`) analyzing honeypot traps, submission velocity, link density, and burner email domains.
+* 📦 **Configurable Quarantine & Zero-Noise Digests** — Submissions exceeding the spam threshold (`SPAM_THRESHOLD=60`) are quarantined in storage without triggering instant inbox alerts; automated weekly digests are sent *only* if spam was caught.
 * 💾 **Flexible Storage** — Choose between Cloudflare KV (key-value) or D1 (SQLite SQL) databases.
 * 🔗 **Webhooks & Real-time Dispatch** — Trigger HTTP POST webhooks on form submissions with global (`WEBHOOK_URL`) and per-site (`WEBHOOK_URL_${SITE_ID}`) routing.
 * 🛠️ **Interactive Setup Wizard** — Run `npm run setup` for guided configuration and clear manifest summaries.

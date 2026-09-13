@@ -191,3 +191,33 @@ This resolution order applies to:
 ### 3. Separation of Form Data vs. System Metadata
 * **System Metadata** (`formId`, `siteId`, `turnstileToken`) must always be specified via `<form>` dataset attributes (`data-freeformer`, `data-freeformer-site`) or JS configuration—**never via hidden HTML `<input>` tags**.
 * **Form Payload Data**: Hidden HTML `<input>` tags inside forms are strictly preserved for user and business form payload data.
+
+---
+
+## 5. Setting Up Honeypot Traps (Edge Spam Protection)
+
+FreeFormer's edge spam engine evaluates submissions for hidden **honeypot fields** (configured via `SPAM_HONEYPOT_FIELDS`, default: `_hp,website,company_url`). 
+
+Automated bots crawl HTML forms and blindly fill every input they find. Legitimate human visitors never see or interact with hidden honeypot fields. When a honeypot field is populated, FreeFormer automatically applies a **+80 point spam penalty**, quarantining the submission in storage and suppressing instant notification emails.
+
+### Adding a Honeypot to Your HTML Form
+
+Add an input named `_hp` or `website` styled offscreen or hidden:
+
+```html
+<form data-freeformer="contact" data-freeformer-site="splitphase.io">
+  <!-- Legitimate fields -->
+  <input type="text" name="name" placeholder="Your Name" required />
+  <input type="email" name="email" placeholder="Your Email" required />
+  <textarea name="message" placeholder="Your Message" required></textarea>
+
+  <!-- Honeypot trap (Hidden from humans, visible to bots) -->
+  <div style="position: absolute; left: -9999px; opacity: 0; pointer-events: none;" aria-hidden="true">
+    <label for="form_website_hp">Leave this field blank</label>
+    <input type="text" id="form_website_hp" name="_hp" tabindex="-1" autocomplete="off" />
+  </div>
+
+  <button type="submit">Send Message</button>
+</form>
+```
+

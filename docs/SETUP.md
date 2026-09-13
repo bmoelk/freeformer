@@ -190,6 +190,12 @@ All configuration parameters and secrets supported by FreeFormer are summarized 
 | `RATE_LIMIT_ENABLED` | Var | Optional | `false` | Enable/disable IP rate limiting (true / false). |
 | `RATE_LIMIT_REQUESTS` | Var | Optional | `10` | Max requests allowed per rate limit window per IP. |
 | `RATE_LIMIT_WINDOW` | Var | Optional | `60` | Duration of rate limit window in seconds. |
+| `SPAM_DETECTION_ENABLED` | Var | Optional | `true` | Enable or disable edge-native spam scoring and quarantine (true / false). |
+| `SPAM_THRESHOLD` | Var | Optional | `60` | Spam score threshold (0-100). Submissions at or above this score are quarantined and instant email notifications are suppressed. |
+| `SPAM_HONEYPOT_FIELDS` | Var | Optional | `_hp,website,company_url` | Comma-separated list of form field names treated as honeypot traps for bots. |
+| `SPAM_KEYWORDS` | Var | Optional | - | Optional comma-separated list of custom site-specific spam keywords to flag. |
+| `SPAM_DIGEST_ENABLED` | Var | Optional | `true` | Enable weekly email summaries of quarantined spam submissions (true / false). |
+| `SPAM_DIGEST_EMAIL_TO` | Var/Secret | Optional | - | Recipient email address for periodic spam digests (falls back to EMAIL_TO if omitted). |
 | `STORAGE_ENGINE` | Var | Yes | `kv` | Primary storage engine for form submissions (kv, d1, none). |
 | `EMAIL_PROVIDER` | Var | Optional | `none` | Outbound email provider (none, console, mailtrap, resend, sendgrid, mailgun). |
 | `EMAIL_FROM` | Var/Secret | Required (Required when EMAIL_PROVIDER is not 'none' or 'console') | - | Outbound 'From' email address (e.g. contact@yourdomain.com). |
