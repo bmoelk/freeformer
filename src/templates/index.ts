@@ -6,6 +6,9 @@
 import Mustache from 'mustache';
 import htmlTemplate from './email.html.mustache';
 import textTemplate from './email.text.mustache';
+import digestHtmlTemplate from './digest.html.mustache';
+import digestTextTemplate from './digest.text.mustache';
+import type { SpamDigestData } from '../spam/types';
 
 export interface EmailTemplateData {
   formId: string;
@@ -109,4 +112,18 @@ export function generateEmailTEXT(submission: EmailTemplateData): string {
     fields,
   };
   return Mustache.render(textTemplate, context);
+}
+
+/**
+ * Render HTML Spam Digest Email via Mustache
+ */
+export function generateDigestHTML(digestData: SpamDigestData): string {
+  return Mustache.render(digestHtmlTemplate, digestData);
+}
+
+/**
+ * Render Plaintext Spam Digest Email via Mustache
+ */
+export function generateDigestTEXT(digestData: SpamDigestData): string {
+  return Mustache.render(digestTextTemplate, digestData);
 }

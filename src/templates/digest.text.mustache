@@ -1,0 +1,28 @@
+================================================================================
+🛡️ FREEFORMER SPAM DIGEST
+================================================================================
+Summary for: {{periodStart}} to {{periodEnd}}
+
+METRICS:
+- Quarantined Spam: {{spamSubmissions}}
+- Clean Submissions: {{cleanSubmissions}}
+- Spam Ratio: {{spamPercentage}}
+
+QUARANTINED SUBMISSIONS ({{spamSubmissions}}):
+--------------------------------------------------------------------------------
+{{#items}}
+• Date: {{timestamp}}
+  Site: {{siteId}} | Form: {{formId}}
+  Sender: {{senderName}} <{{senderEmail}}>
+  Spam Score: {{score}}/100
+  Top Reason: {{topReason}}
+  Snippet: "{{snippet}}"
+--------------------------------------------------------------------------------
+{{/items}}
+
+{{#adminUrl}}
+Review quarantined submissions in your Zero-Trust Admin dashboard:
+{{adminUrl}}
+{{/adminUrl}}
+
+Sent automatically by FreeFormer Edge Engine (Cloudflare Workers).

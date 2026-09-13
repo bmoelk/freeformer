@@ -31,12 +31,18 @@ export interface FormSubmissionData {
   };
 }
 
+export interface RawEmailPayload {
+  subject: string;
+  html: string;
+  text: string;
+}
+
 /**
- * Send email notification for form submission
+ * Send arbitrary email (e.g. notifications, digests) via the configured provider
  */
-export async function sendEmailNotification(
+export async function sendRawEmail(
   config: EmailConfig,
-  submission: FormSubmissionData,
+  payload: RawEmailPayload,
   logger?: Logger
 ): Promise<{ success: boolean; error?: string }> {
   logger?.debug(
@@ -50,7 +56,7 @@ export async function sendEmailNotification(
   }
 
   if (config.provider === 'console') {
-    return sendViaConsole(config, submission);
+    return sendViaConsole(config, payload);
   }
 
   if (!config.apiKey || !config.to) {
@@ -64,13 +70,13 @@ export async function sendEmailNotification(
   try {
     switch (config.provider) {
       case 'resend':
-        return await sendViaResend(config, submission, logger);
+        return await sendViaResend(config, payload, logger);
       case 'sendgrid':
-        return await sendViaSendGrid(config, submission, logger);
+        return await sendViaSendGrid(config, payload, logger);
       case 'mailgun':
-        return await sendViaMailgun(config, submission, logger);
+        return await sendViaMailgun(config, payload, logger);
       case 'mailtrap':
-        return await sendViaMailtrap(config, submission, logger);
+        return await sendViaMailtrap(config, payload, logger);
       default:
         logger?.error('Email', `Unknown email provider: "${config.provider}"`);
         return { success: false, error: 'Unknown email provider' };
@@ -84,6 +90,22 @@ export async function sendEmailNotification(
   }
 }
 
+/**
+ * Send email notification for form submission
+ */
+export async function sendEmailNotification(
+  config: EmailConfig,
+  submission: FormSubmissionData,
+  logger?: Logger
+): Promise<{ success: boolean; error?: string }> {
+  const payload: RawEmailPayload = {
+    subject: getEmailSubject(submission),
+    html: generateEmailHTML(submission),
+    text: generateEmailTEXT(submission),
+  };
+  return sendRawEmail(config, payload, logger);
+}
+
 function getEmailSubject(submission: FormSubmissionData): string {
   return submission.siteId
     ? `New Form Submission [${submission.siteId}]: ${submission.formId}`
@@ -95,23 +117,18 @@ function getEmailSubject(submission: FormSubmissionData): string {
  */
 function sendViaConsole(
   config: EmailConfig,
-  submission: FormSubmissionData
+  payload: RawEmailPayload
 ): { success: boolean } {
-  const sanitizedData = sanitizeSubmissionData(submission.data, submission.protectedFields);
-
   console.log(`
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 📧 [FreeFormer Dev Email Logger]                                       │
 ├────────────────────────────────────────────────────────────────────────┤
-│ Form ID:        ${submission.formId}
-│ Site ID:        ${submission.siteId || 'none'}
-│ Submission ID:  ${submission.submissionId}
 │ To:             ${config.to || 'dev@example.com'}
 │ From:           ${config.from || 'noreply@localhost'}
-│ Subject:        ${getEmailSubject(submission)}
+│ Subject:        ${payload.subject}
 ├────────────────────────────────────────────────────────────────────────┤
-│ Form Data:
-${JSON.stringify(sanitizedData, null, 2)}
+│ Content:
+${payload.text}
 └────────────────────────────────────────────────────────────────────────┘
 `);
   return { success: true };
@@ -122,7 +139,7 @@ ${JSON.stringify(sanitizedData, null, 2)}
  */
 async function sendViaResend(
   config: EmailConfig,
-  submission: FormSubmissionData,
+  payload: RawEmailPayload,
   logger?: Logger
 ): Promise<{ success: boolean; error?: string }> {
   logger?.debug('Resend', `Request | From: "${config.from}" | To: "${config.to}"`);
@@ -136,9 +153,9 @@ async function sendViaResend(
     body: JSON.stringify({
       from: config.from,
       to: config.to.split(',').map(email => email.trim()),
-      subject: getEmailSubject(submission),
-      html: generateEmailHTML(submission),
-      text: generateEmailTEXT(submission),
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
     }),
   });
 
@@ -158,7 +175,7 @@ async function sendViaResend(
  */
 async function sendViaSendGrid(
   config: EmailConfig,
-  submission: FormSubmissionData,
+  payload: RawEmailPayload,
   logger?: Logger
 ): Promise<{ success: boolean; error?: string }> {
   logger?.debug('SendGrid', `Request | From: "${config.from}" | To: "${config.to}"`);
@@ -176,15 +193,15 @@ async function sendViaSendGrid(
         },
       ],
       from: { email: config.from },
-      subject: getEmailSubject(submission),
+      subject: payload.subject,
       content: [
         {
           type: 'text/plain',
-          value: generateEmailTEXT(submission),
+          value: payload.text,
         },
         {
           type: 'text/html',
-          value: generateEmailHTML(submission),
+          value: payload.html,
         },
       ],
     }),
@@ -205,7 +222,7 @@ async function sendViaSendGrid(
  */
 async function sendViaMailgun(
   config: EmailConfig,
-  submission: FormSubmissionData,
+  payload: RawEmailPayload,
   logger?: Logger
 ): Promise<{ success: boolean; error?: string }> {
   if (!config.mailgunDomain) {
@@ -218,9 +235,9 @@ async function sendViaMailgun(
   const formData = new FormData();
   formData.append('from', config.from);
   formData.append('to', config.to);
-  formData.append('subject', getEmailSubject(submission));
-  formData.append('html', generateEmailHTML(submission));
-  formData.append('text', generateEmailTEXT(submission));
+  formData.append('subject', payload.subject);
+  formData.append('html', payload.html);
+  formData.append('text', payload.text);
 
   const response = await fetch(
     `https://api.mailgun.net/v3/${config.mailgunDomain}/messages`,
@@ -249,7 +266,7 @@ async function sendViaMailgun(
  */
 async function sendViaMailtrap(
   config: EmailConfig,
-  submission: FormSubmissionData,
+  payload: RawEmailPayload,
   logger?: Logger
 ): Promise<{ success: boolean; error?: string }> {
   const isSandbox = !!config.mailtrapInboxId;
@@ -262,18 +279,18 @@ async function sendViaMailtrap(
     body = {
       from: { email: config.from },
       to: config.to.split(',').map(email => ({ email: email.trim() })),
-      subject: getEmailSubject(submission),
-      html: generateEmailHTML(submission),
-      text: generateEmailTEXT(submission),
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
     };
   } else {
     url = 'https://send.api.mailtrap.io/api/send';
     body = {
       from: { email: config.from },
       to: config.to.split(',').map(email => ({ email: email.trim() })),
-      subject: getEmailSubject(submission),
-      html: generateEmailHTML(submission),
-      text: generateEmailTEXT(submission),
+      subject: payload.subject,
+      html: payload.html,
+      text: payload.text,
     };
   }
 
@@ -298,3 +315,4 @@ async function sendViaMailtrap(
   logger?.debug('Mailtrap', `API Success (${response.status}): ${responseText}`);
   return { success: true };
 }
+
