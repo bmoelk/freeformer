@@ -1,6 +1,6 @@
 {
     "name": "freeformer",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "A Cloudflare Worker for storing form submissions with Turnstile spam protection",
     "main": "src/index.ts",
     "scripts": {
