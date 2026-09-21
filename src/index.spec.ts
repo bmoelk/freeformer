@@ -8,6 +8,7 @@ import {
     verifySignedDownloadToken,
 } from './files';
 import { buildWebhookPayload, signWebhookPayload } from './webhook';
+import { verifyTurnstile } from './turnstile';
 
 describe('FreeFormer Unit Tests', () => {
     describe('getSiteEnvVariants', () => {
@@ -171,6 +172,37 @@ describe('FreeFormer Unit Tests', () => {
             const signature = await signWebhookPayload(JSON.stringify(payload), secret);
             expect(typeof signature).toBe('string');
             expect(signature.length).toBe(64); // SHA-256 hex string length
+        });
+    });
+
+    describe('verifyTurnstile', () => {
+        it('passes in dev mock mode', async () => {
+            const result = await verifyTurnstile('dev', '', '', true);
+            expect(result.success).toBe(true);
+            expect(result.score).toBe(1.0);
+        });
+
+        it('rejects "dev" token in production mode', async () => {
+            const result = await verifyTurnstile('dev', 'some-secret-key', '1.2.3.4', false);
+            expect(result.success).toBe(false);
+            expect(result.errors).toContain('invalid-input-response');
+        });
+
+        it('rejects verification when secret key is missing in production', async () => {
+            const result = await verifyTurnstile('real-or-test-token', '', '1.2.3.4', false);
+            expect(result.success).toBe(false);
+            expect(result.errors).toContain('missing-secret-key');
+        });
+
+        it('passes Cloudflare official test dummy key combination', async () => {
+            const result = await verifyTurnstile(
+                '1x00000000000000000000AA',
+                '1x00000000000000000000AA00000000000',
+                '1.2.3.4',
+                false
+            );
+            expect(result.success).toBe(true);
+            expect(result.score).toBe(1.0);
         });
     });
 });

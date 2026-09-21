@@ -14,12 +14,10 @@ export async function verifyTurnstile(
     score?: number;
     errors?: string[];
 }> {
-    // Explicit Dev Mode or Dummy Test Token Auto-Pass
+    // Explicit Dev Mode or Cloudflare official dummy test keys
     if (
         isDevMock ||
-        token === 'dev' ||
-        token === '1x00000000000000000000AA' ||
-        secretKey === '1x00000000000000000000AA00000000000'
+        (token === '1x00000000000000000000AA' && secretKey === '1x00000000000000000000AA00000000000')
     ) {
         if (logger) {
             logger.debug('Turnstile', '⚡ Dev Mock Verification Auto-Passed');
@@ -32,10 +30,36 @@ export async function verifyTurnstile(
         };
     }
 
+    // Reject 'dev' mock token in production
+    if (token === 'dev') {
+        if (logger) {
+            logger.warn('Turnstile', 'Rejected "dev" token in production environment');
+        }
+        return {
+            success: false,
+            errors: ['invalid-input-response'],
+        };
+    }
+
+    // Missing secret key validation
+    if (!secretKey) {
+        if (logger) {
+            logger.error('Turnstile', 'Missing Turnstile secret key');
+        } else {
+            console.error('Turnstile verification error: Missing secret key');
+        }
+        return {
+            success: false,
+            errors: ['missing-secret-key'],
+        };
+    }
+
     const formData = new FormData();
     formData.append('secret', secretKey);
     formData.append('response', token);
-    formData.append('remoteip', remoteIP);
+    if (remoteIP && remoteIP !== 'unknown') {
+        formData.append('remoteip', remoteIP);
+    }
 
     try {
         const response = await fetch(

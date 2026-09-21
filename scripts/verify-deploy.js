@@ -15,21 +15,34 @@ const path = require('path');
 const DEFAULT_URL = process.env.WORKER_URL || 'https://freeformer.bmoelk.workers.dev';
 const MANIFEST_PATH = path.join(__dirname, '..', 'config-manifest.json');
 
-async function fetchJson(url) {
-  return new Promise((resolve, reject) => {
-    const client = url.startsWith('https') ? https : http;
-    client.get(url, (res) => {
-      let data = '';
-      res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => {
-        try {
-          resolve({ statusCode: res.statusCode, data: JSON.parse(data) });
-        } catch (e) {
-          resolve({ statusCode: res.statusCode, raw: data });
-        }
-      });
-    }).on('error', reject);
-  });
+async function fetchJson(url, retries = 3, delayMs = 2000) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const result = await new Promise((resolve, reject) => {
+      const client = url.startsWith('https') ? https : http;
+      client.get(url, (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          try {
+            resolve({ statusCode: res.statusCode, data: JSON.parse(data) });
+          } catch (e) {
+            resolve({ statusCode: res.statusCode, raw: data });
+          }
+        });
+      }).on('error', reject);
+    });
+
+    if (result.statusCode === 200 && result.data) {
+      return result;
+    }
+
+    if (attempt < retries) {
+      process.stdout.write(`⏳ Edge routing propagating (status ${result.statusCode}). Retrying in ${delayMs / 1000}s...\n`);
+      await new Promise((r) => setTimeout(r, delayMs));
+    } else {
+      return result;
+    }
+  }
 }
 
 function loadManifest() {

@@ -14,6 +14,7 @@ This document provides complete, detailed specifications for all REST API endpoi
 | `GET` | [`/submissions/:formId`](#get-submissionsformid) | List paginated submissions for a specific form | `Bearer API_KEY` |
 | `GET` | [`/submission/:id`](#get-submissionid) | Retrieve details for a single submission by ID | `Bearer API_KEY` |
 | `POST` | [`/email-test`](#post-email-test) | Trigger test email dispatch to verify provider | `Bearer API_KEY` |
+| `POST` | [`/turnstile-test`](#post-turnstile-test) | Verify Turnstile secret key & ping Cloudflare siteverify | Cloudflare Access / `Bearer API_KEY` |
 | `POST` | [`/admin/spam-digest`](#post-adminspam-digest) | On-demand spam digest trigger and dry-run preview | Cloudflare Access / Zero Trust |
 
 ---
@@ -231,6 +232,42 @@ Authorization: Bearer YOUR_API_KEY
   "success": true,
   "message": "Test email sent successfully",
   "provider": "resend"
+}
+```
+
+---
+
+### `POST /turnstile-test`
+
+Tests and validates Cloudflare Turnstile secret key configuration for a specific site, performing a live `siteverify` request directly to Cloudflare. This registers an immediate `siteverify` validation with Cloudflare, clearing "Siteverify isn't being called" dashboard warnings.
+
+Protected by **Cloudflare Zero Trust** or Bearer `API_KEY`.
+
+#### Request
+```http
+POST /turnstile-test HTTP/1.1
+Host: your-worker.workers.dev
+Authorization: Bearer YOUR_API_KEY
+Content-Type: application/json
+
+{
+  "siteId": "brainendeavor"
+}
+```
+
+#### Response (`200 OK`)
+```json
+{
+  "success": true,
+  "siteId": "brainendeavor",
+  "secretKeyConfigured": true,
+  "secretKeyPrefix": "0x4AAAAAAE...",
+  "cloudflareResponse": {
+    "success": true,
+    "challenge_ts": "2026-09-18T20:30:00.000Z",
+    "hostname": "brainendeavor.com"
+  },
+  "message": "Cloudflare Turnstile siteverify reached and secret key verified successfully"
 }
 ```
 

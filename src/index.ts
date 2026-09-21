@@ -385,6 +385,18 @@ app.post('/submit', async (c) => {
             );
         }
 
+        if (turnstileToken === 'dev' && !isDevMock) {
+            logger.warn('Turnstile', 'Rejected "dev" token in production environment');
+            return c.json(
+                {
+                    success: false,
+                    error: 'Turnstile verification failed',
+                    details: ['invalid-input-response'],
+                },
+                403
+            );
+        }
+
         if (!formId) {
             return c.json(
                 { success: false, error: 'Form ID is required' },
@@ -844,6 +856,80 @@ app.post('/email-test', async (c) => {
                 success: false,
                 error: 'Internal server error',
                 details: error instanceof Error ? error.message : String(error)
+            },
+            500
+        );
+    }
+});
+
+// Test Turnstile configuration & perform live Cloudflare siteverify ping
+app.post('/turnstile-test', requireZeroTrustAuth(), async (c) => {
+    const logger = createLogger(c.env as Record<string, string | undefined>);
+    try {
+        const body = (await c.req.json().catch(() => ({}))) as Record<string, any>;
+        const siteId = (body.siteId as string) || c.req.query('siteId') || 'brainendeavor';
+        const envRecord = c.env as Record<string, string | undefined>;
+        const secretKey = resolveSiteEnv(envRecord, 'TURNSTILE_SECRET_KEY', siteId) || '';
+
+        if (!secretKey) {
+            return c.json(
+                {
+                    success: false,
+                    error: `No Turnstile secret key resolved for site "${siteId}"`,
+                    hint: `Set TURNSTILE_SECRET_KEY_${siteId.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase()} via wrangler secret put`,
+                },
+                400
+            );
+        }
+
+        // Test token: use provided token or Cloudflare official dummy token
+        const testToken = (body.turnstileToken as string) || '1x00000000000000000000AA';
+        const clientIP = c.req.header('cf-connecting-ip') || '';
+
+        const formData = new FormData();
+        formData.append('secret', secretKey);
+        formData.append('response', testToken);
+        if (clientIP && clientIP !== 'unknown') {
+            formData.append('remoteip', clientIP);
+        }
+
+        const cfRes = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+            method: 'POST',
+            body: formData,
+        });
+
+        const cfResult = (await cfRes.json()) as {
+            success: boolean;
+            score?: number;
+            'error-codes'?: string[];
+            challenge_ts?: string;
+            hostname?: string;
+        };
+
+        const keyPrefix = secretKey.length > 10 ? secretKey.substring(0, 10) + '...' : '***';
+
+        // Cloudflare returns invalid-input-response when secret key is valid but token is dummy/expired
+        const secretKeyValid = cfResult.success || !cfResult['error-codes']?.includes('invalid-input-secret');
+
+        logger.info('Turnstile', `Diagnostic test for site "${siteId}" - secret key valid: ${secretKeyValid}, cf success: ${cfResult.success}`);
+
+        return c.json({
+            success: secretKeyValid,
+            siteId,
+            secretKeyConfigured: true,
+            secretKeyPrefix: keyPrefix,
+            cloudflareResponse: cfResult,
+            message: secretKeyValid
+                ? 'Cloudflare Turnstile siteverify reached and secret key verified successfully'
+                : 'Cloudflare Turnstile rejected secret key (invalid-input-secret)',
+        });
+    } catch (error) {
+        logger.error('API', 'Error testing Turnstile verification', error);
+        return c.json(
+            {
+                success: false,
+                error: 'Internal server error during Turnstile test',
+                details: error instanceof Error ? error.message : String(error),
             },
             500
         );
