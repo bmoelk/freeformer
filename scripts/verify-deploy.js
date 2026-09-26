@@ -232,7 +232,7 @@ async function verifyDeployment() {
     // Detect all referenced site IDs from local config (e.g. BRAINENDEAVOR, SPLITPHASE)
     const siteIds = new Set();
     for (const key of local.keys) {
-      const match = key.match(/^(?:TURNSTILE_SECRET_KEY|EMAIL_TO|EMAIL_FROM|EMAIL_PROVIDER|EMAIL_API_KEY|WEBHOOK_URL)_([A-Z0-9_]+)$/);
+      const match = key.match(/^(?:TURNSTILE_SECRET_KEY|EMAIL_TO|EMAIL_FROM|EMAIL_PROVIDER|EMAIL_API_KEY|ZOHO_API_URL|WEBHOOK_URL)_([A-Z0-9_]+)$/);
       if (match) {
         siteIds.add(match[1]);
       }

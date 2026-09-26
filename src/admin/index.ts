@@ -537,6 +537,7 @@ adminApp.post('/spam-digest', async (c) => {
     to: c.env.SPAM_DIGEST_EMAIL_TO || c.env.EMAIL_TO || '',
     mailgunDomain: c.env.MAILGUN_DOMAIN,
     mailtrapInboxId: c.env.MAILTRAP_INBOX_ID,
+    zohoApiUrl: c.env.ZOHO_API_URL,
     siteId,
   };
 

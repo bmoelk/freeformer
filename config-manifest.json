@@ -102,8 +102,8 @@
       "kind": "Var",
       "required": false,
       "default": "none",
-      "description": "Outbound email provider (none, console, mailtrap, resend, sendgrid, mailgun).",
-      "options": ["none", "console", "mailtrap", "resend", "sendgrid", "mailgun"]
+      "description": "Outbound email provider (none, console, mailtrap, resend, sendgrid, mailgun, zoho).",
+      "options": ["none", "console", "mailtrap", "resend", "sendgrid", "mailgun", "zoho", "zoho_cpaas", "zeptomail"]
     },
     {
       "name": "EMAIL_FROM",
@@ -133,7 +133,7 @@
         "condition": "EMAIL_PROVIDER is not 'none' or 'console'",
         "rule": { "var": "EMAIL_PROVIDER", "notIn": ["none", "console"] }
       },
-      "description": "API key for Mailtrap, Resend, SendGrid, or Mailgun."
+      "description": "API key for Mailtrap, Resend, SendGrid, Mailgun, or Zoho CPaaS / ZeptoMail."
     },
     {
       "name": "EMAIL_API_KEY_${SITE_ID}",
@@ -211,6 +211,19 @@
         "rule": { "var": "EMAIL_PROVIDER", "equals": "mailtrap_sandbox" }
       },
       "description": "Mailtrap inbox identifier for sandbox testing mode."
+    },
+    {
+      "name": "ZOHO_API_URL",
+      "kind": "Var",
+      "required": false,
+      "default": "https://cpaas.zoho.com/v1.1/email",
+      "description": "Optional API endpoint for Zoho CPaaS or ZeptoMail (e.g. https://api.zeptomail.com/v1.1/email)."
+    },
+    {
+      "name": "ZOHO_API_URL_${SITE_ID}",
+      "kind": "Var",
+      "required": false,
+      "description": "Per-site Zoho CPaaS or ZeptoMail API endpoint override."
     },
     {
       "name": "PROTECTED_FIELDS",

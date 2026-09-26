@@ -19,7 +19,7 @@ FreeFormer provides a complete, edge-native backend for collecting form submissi
 * 🛠️ **Interactive Setup Wizard** — Run `npm run setup` for guided configuration and clear manifest summaries.
 * 🔒 **Zero-Secrets Security Architecture** — 100% safe for public Git repositories; no credentials in `wrangler.toml`.
 * 🔍 **Pre-Commit Security Scanner** — Automated scanner (`npm run scan-secrets`) to block staged credential leaks.
-* 📧 **Multi-Provider Email Alerts & Mustache Templates** — Outbound email notifications with customizable Mustache templates (`src/templates/email.html.mustache`) via Resend, SendGrid, Mailgun, Mailtrap, or local console logger (`EMAIL_PROVIDER=console`).
+* 📧 **Multi-Provider Email Alerts & Mustache Templates** — Outbound email notifications with customizable Mustache templates (`src/templates/email.html.mustache`) via Zoho CPaaS / ZeptoMail, Resend, SendGrid, Mailgun, Mailtrap, or local console logger (`EMAIL_PROVIDER=console`).
 * ⚡ **Edge Performance** — Sub-50ms global response times on Cloudflare's edge network.
 
 ---

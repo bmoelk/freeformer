@@ -197,10 +197,10 @@ All configuration parameters and secrets supported by FreeFormer are summarized 
 | `SPAM_DIGEST_ENABLED` | Var | Optional | `true` | Enable weekly email summaries of quarantined spam submissions (true / false). |
 | `SPAM_DIGEST_EMAIL_TO` | Var/Secret | Optional | - | Recipient email address for periodic spam digests (falls back to EMAIL_TO if omitted). |
 | `STORAGE_ENGINE` | Var | Yes | `kv` | Primary storage engine for form submissions (kv, d1, none). |
-| `EMAIL_PROVIDER` | Var | Optional | `none` | Outbound email provider (none, console, mailtrap, resend, sendgrid, mailgun). |
+| `EMAIL_PROVIDER` | Var | Optional | `none` | Outbound email provider (none, console, mailtrap, resend, sendgrid, mailgun, zoho). |
 | `EMAIL_FROM` | Var/Secret | Required (Required when EMAIL_PROVIDER is not 'none' or 'console') | - | Outbound 'From' email address (e.g. contact@yourdomain.com). |
 | `EMAIL_TO` | Var/Secret | Required (EMAIL_PROVIDER is not 'none') | - | Target notification recipient email address (e.g. alerts@yourdomain.com). |
-| `EMAIL_API_KEY` | Secret | Required (EMAIL_PROVIDER is not 'none' or 'console') | - | API key for Mailtrap, Resend, SendGrid, or Mailgun. |
+| `EMAIL_API_KEY` | Secret | Required (EMAIL_PROVIDER is not 'none' or 'console') | - | API key for Mailtrap, Resend, SendGrid, Mailgun, or Zoho CPaaS / ZeptoMail. |
 | `EMAIL_API_KEY_${SITE_ID}` | Secret | Optional | - | Per-site email provider API key override (e.g. EMAIL_API_KEY_BRAINENDEAVOR). |
 | `EMAIL_TO_${SITE_ID}` | Var/Secret | Optional | - | Per-site notification recipient email override (e.g. EMAIL_TO_BRAINENDEAVOR). |
 | `EMAIL_FROM_${SITE_ID}` | Var/Secret | Optional | - | Per-site 'From' email sender override (e.g. EMAIL_FROM_BRAINENDEAVOR). |
@@ -212,6 +212,8 @@ All configuration parameters and secrets supported by FreeFormer are summarized 
 | `WEBHOOK_URL_${SITE_ID}` | Var/Secret | Optional | - | Per-site webhook POST URL (e.g. WEBHOOK_URL_MYSITE). |
 | `MAILGUN_DOMAIN` | Var/Secret | Required (EMAIL_PROVIDER is 'mailgun') | - | Mailgun sending domain (required when using Mailgun). |
 | `MAILTRAP_INBOX_ID` | Var/Secret | Required (Using Mailtrap Sandbox Testing Mode) | - | Mailtrap inbox identifier for sandbox testing mode. |
+| `ZOHO_API_URL` | Var | Optional | `https://cpaas.zoho.com/v1.1/email` | Optional API endpoint for Zoho CPaaS or ZeptoMail (e.g. https://api.zeptomail.com/v1.1/email). |
+| `ZOHO_API_URL_${SITE_ID}` | Var | Optional | - | Per-site Zoho CPaaS or ZeptoMail API endpoint override. |
 | `PROTECTED_FIELDS` | Var | Optional | - | Global comma-separated list of form fields to protect from notification emails (supports wildcards, e.g. ssn,tax_id,utm_*,internal_*). |
 | `PROTECTED_FIELDS_${SITE_ID}` | Var | Optional | - | Per-site protected form fields list (e.g. PROTECTED_FIELDS_SPLITPHASE_IO). |
 | `WEBHOOK_SECRET` | Secret | Optional | - | Secret key used for HMAC-SHA256 payload signing and temporary signed R2 download tokens. |

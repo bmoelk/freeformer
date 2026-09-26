@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { getSiteEnvVariants, resolveSiteEnv } from './index';
 import { matchesPattern, isFieldProtected, sanitizeSubmissionData } from './templates';
 import {
@@ -9,6 +9,7 @@ import {
 } from './files';
 import { buildWebhookPayload, signWebhookPayload } from './webhook';
 import { verifyTurnstile } from './turnstile';
+import { parseEmailAddress, sendViaZoho, sendRawEmail, type EmailConfig, type RawEmailPayload } from './email';
 
 describe('FreeFormer Unit Tests', () => {
     describe('getSiteEnvVariants', () => {
@@ -205,4 +206,187 @@ describe('FreeFormer Unit Tests', () => {
             expect(result.score).toBe(1.0);
         });
     });
+
+    describe('Zoho CPaaS Email Provider', () => {
+        const originalFetch = globalThis.fetch;
+
+        afterEach(() => {
+            globalThis.fetch = originalFetch;
+            vi.restoreAllMocks();
+        });
+
+        describe('parseEmailAddress', () => {
+            it('parses plain email address', () => {
+                const parsed = parseEmailAddress('user@example.com');
+                expect(parsed).toEqual({ address: 'user@example.com' });
+            });
+
+            it('parses email address with display name', () => {
+                const parsed = parseEmailAddress('Brian M <brian@example.com>');
+                expect(parsed).toEqual({ address: 'brian@example.com', name: 'Brian M' });
+            });
+
+            it('parses quoted display names', () => {
+                const parsed = parseEmailAddress('"Support Team" <support@example.com>');
+                expect(parsed).toEqual({ address: 'support@example.com', name: 'Support Team' });
+            });
+        });
+
+        describe('sendViaZoho', () => {
+            it('sends email to default endpoint with correctly structured body and Zoho-enczapikey header', async () => {
+                let capturedUrl = '';
+                let capturedOptions: any = {};
+
+                globalThis.fetch = vi.fn().mockImplementation(async (url: string, opts: any) => {
+                    capturedUrl = url;
+                    capturedOptions = opts;
+                    return new Response(JSON.stringify({
+                        data: [{ code: 'EM_104', message: 'OK' }],
+                        message: 'OK',
+                        request_id: 'req-123'
+                    }), { status: 200 });
+                });
+
+                const config: EmailConfig = {
+                    provider: 'zoho',
+                    apiKey: 'test-api-key-123',
+                    from: 'FreeFormer <noreply@splitphase.io>',
+                    to: 'brian@dailyreprieve.com, alerts@splitphase.io',
+                };
+
+                const payload: RawEmailPayload = {
+                    subject: 'Test Form Submission',
+                    html: '<p>Hello world</p>',
+                    text: 'Hello world',
+                };
+
+                const result = await sendViaZoho(config, payload);
+
+                expect(result.success).toBe(true);
+                expect(capturedUrl).toBe('https://cpaas.zoho.com/v1.1/email');
+                expect(capturedOptions.method).toBe('POST');
+                expect(capturedOptions.headers['Authorization']).toBe('Zoho-enczapikey test-api-key-123');
+                expect(capturedOptions.headers['Content-Type']).toBe('application/json');
+
+                const parsedBody = JSON.parse(capturedOptions.body);
+                expect(parsedBody.from).toEqual({ address: 'noreply@splitphase.io', name: 'FreeFormer' });
+                expect(parsedBody.to).toEqual([
+                    { email_address: { address: 'brian@dailyreprieve.com' } },
+                    { email_address: { address: 'alerts@splitphase.io' } },
+                ]);
+                expect(parsedBody.subject).toBe('Test Form Submission');
+                expect(parsedBody.htmlbody).toBe('<p>Hello world</p>');
+                expect(parsedBody.textbody).toBe('Hello world');
+            });
+
+            it('does not duplicate Zoho-enczapikey if already prefixed', async () => {
+                let authHeader = '';
+
+                globalThis.fetch = vi.fn().mockImplementation(async (_url: string, opts: any) => {
+                    authHeader = opts.headers['Authorization'];
+                    return new Response(JSON.stringify({ message: 'OK' }), { status: 200 });
+                });
+
+                const config: EmailConfig = {
+                    provider: 'zoho',
+                    apiKey: 'Zoho-enczapikey pre-prefixed-token-xyz',
+                    from: 'noreply@example.com',
+                    to: 'admin@example.com',
+                };
+
+                const result = await sendViaZoho(config, {
+                    subject: 'Subject',
+                    html: '<p>Test</p>',
+                    text: 'Test',
+                });
+
+                expect(result.success).toBe(true);
+                expect(authHeader).toBe('Zoho-enczapikey pre-prefixed-token-xyz');
+            });
+
+            it('supports custom zohoApiUrl override (e.g. ZeptoMail regional endpoint)', async () => {
+                let capturedUrl = '';
+
+                globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+                    capturedUrl = url;
+                    return new Response(JSON.stringify({ message: 'OK' }), { status: 200 });
+                });
+
+                const config: EmailConfig = {
+                    provider: 'zoho',
+                    apiKey: 'key',
+                    from: 'noreply@example.com',
+                    to: 'admin@example.com',
+                    zohoApiUrl: 'https://api.zeptomail.eu/v1.1/email',
+                };
+
+                const result = await sendViaZoho(config, {
+                    subject: 'Regional Test',
+                    html: '<p>EU</p>',
+                    text: 'EU',
+                });
+
+                expect(result.success).toBe(true);
+                expect(capturedUrl).toBe('https://api.zeptomail.eu/v1.1/email');
+            });
+
+            it('handles API error responses and extracts structured error codes', async () => {
+                globalThis.fetch = vi.fn().mockImplementation(async () => {
+                    return new Response(JSON.stringify({
+                        data: {
+                            error_code: 'TM_3004',
+                            message: 'Invalid request: from address not verified'
+                        },
+                        message: 'error'
+                    }), { status: 400 });
+                });
+
+                const config: EmailConfig = {
+                    provider: 'zoho',
+                    apiKey: 'key',
+                    from: 'unverified@example.com',
+                    to: 'admin@example.com',
+                };
+
+                const result = await sendViaZoho(config, {
+                    subject: 'Subject',
+                    html: 'html',
+                    text: 'text',
+                });
+
+                expect(result.success).toBe(false);
+                expect(result.error).toContain('Zoho error (400)');
+                expect(result.error).toContain('Invalid request: from address not verified (TM_3004)');
+            });
+        });
+
+        describe('sendRawEmail provider dispatch', () => {
+            it('routes zoho, zoho_cpaas, and zeptomail providers to sendViaZoho', async () => {
+                const fetchMock = vi.fn().mockImplementation(async () =>
+                    new Response(JSON.stringify({ message: 'OK' }), { status: 200 })
+                );
+                globalThis.fetch = fetchMock;
+
+                const payload: RawEmailPayload = {
+                    subject: 'Subject',
+                    html: 'html',
+                    text: 'text',
+                };
+
+                for (const provider of ['zoho', 'zoho_cpaas', 'zeptomail'] as const) {
+                    const res = await sendRawEmail({
+                        provider,
+                        apiKey: 'key-123',
+                        from: 'from@example.com',
+                        to: 'to@example.com',
+                    }, payload);
+
+                    expect(res.success).toBe(true);
+                }
+
+                expect(fetchMock).toHaveBeenCalledTimes(3);
+            });
+        });
+    });
 });
+

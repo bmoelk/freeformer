@@ -7,12 +7,13 @@ import { type Logger } from './logger';
 import { generateEmailHTML, generateEmailTEXT, sanitizeSubmissionData } from './templates';
 
 export interface EmailConfig {
-  provider: 'console' | 'resend' | 'sendgrid' | 'mailgun' | 'mailtrap' | 'none';
+  provider: 'console' | 'resend' | 'sendgrid' | 'mailgun' | 'mailtrap' | 'zoho' | 'zoho_cpaas' | 'zeptomail' | 'none';
   apiKey: string;
   from: string;
   to: string;
   mailgunDomain?: string; // Required for Mailgun
   mailtrapInboxId?: string; // Required for Mailtrap (testing mode)
+  zohoApiUrl?: string; // Optional for Zoho CPaaS (defaults to https://cpaas.zoho.com/v1.1/email)
   siteId?: string;
   protectedFields?: string[];
 }
@@ -77,6 +78,10 @@ export async function sendRawEmail(
         return await sendViaMailgun(config, payload, logger);
       case 'mailtrap':
         return await sendViaMailtrap(config, payload, logger);
+      case 'zoho':
+      case 'zoho_cpaas':
+      case 'zeptomail':
+        return await sendViaZoho(config, payload, logger);
       default:
         logger?.error('Email', `Unknown email provider: "${config.provider}"`);
         return { success: false, error: 'Unknown email provider' };
@@ -315,4 +320,85 @@ async function sendViaMailtrap(
   logger?.debug('Mailtrap', `API Success (${response.status}): ${responseText}`);
   return { success: true };
 }
+
+/**
+ * Parse an email string into address and optional display name
+ * Supports formats: "user@example.com", "John Doe <user@example.com>"
+ */
+export function parseEmailAddress(input: string): { address: string; name?: string } {
+  const trimmed = input.trim();
+  const match = trimmed.match(/^(?:(.*?)<)?([^<>]+)>?$/);
+  if (match && match[1]) {
+    const name = match[1].trim().replace(/^["']|["']$/g, '');
+    const address = match[2].trim();
+    return name ? { address, name } : { address };
+  }
+  return { address: trimmed };
+}
+
+/**
+ * Send email via Zoho CPaaS / ZeptoMail
+ */
+export async function sendViaZoho(
+  config: EmailConfig,
+  payload: RawEmailPayload,
+  logger?: Logger
+): Promise<{ success: boolean; error?: string }> {
+  const endpoint = config.zohoApiUrl || 'https://cpaas.zoho.com/v1.1/email';
+  logger?.debug('Zoho', `Request URL: ${endpoint} | From: "${config.from}" | To: "${config.to}"`);
+
+  const trimmedKey = config.apiKey.trim();
+  const authHeader = trimmedKey.startsWith('Zoho-enczapikey ')
+    ? trimmedKey
+    : `Zoho-enczapikey ${trimmedKey}`;
+
+  const fromObj = parseEmailAddress(config.from);
+  const toRecipients = config.to
+    .split(',')
+    .map(email => email.trim())
+    .filter(Boolean)
+    .map(email => ({
+      email_address: parseEmailAddress(email),
+    }));
+
+  const body = {
+    from: fromObj,
+    to: toRecipients,
+    subject: payload.subject,
+    htmlbody: payload.html,
+    textbody: payload.text,
+  };
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Authorization': authHeader,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+
+  const responseText = await response.text();
+
+  if (!response.ok) {
+    let parsedMessage = responseText;
+    try {
+      const errorJson = JSON.parse(responseText);
+      if (errorJson.data?.message) {
+        parsedMessage = `${errorJson.data.message}${errorJson.data.error_code ? ` (${errorJson.data.error_code})` : ''}`;
+      } else if (errorJson.message) {
+        parsedMessage = errorJson.message;
+      }
+    } catch {
+      // Fall back to responseText
+    }
+    logger?.error('Zoho', `API Error (${response.status}): ${responseText}`);
+    return { success: false, error: `Zoho error (${response.status}): ${parsedMessage}` };
+  }
+
+  logger?.debug('Zoho', `API Success (${response.status}): ${responseText}`);
+  return { success: true };
+}
+
 

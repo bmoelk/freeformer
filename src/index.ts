@@ -46,6 +46,7 @@ type Bindings = {
     EMAIL_TO?: string;
     MAILGUN_DOMAIN?: string;
     MAILTRAP_INBOX_ID?: string;
+    ZOHO_API_URL?: string;
     API_KEY?: string;
     WEBHOOK_URL?: string;
     WEBHOOK_SECRET?: string;
@@ -178,6 +179,7 @@ app.get('/', (c) => {
         'EMAIL_FROM',
         'EMAIL_PROVIDER',
         'EMAIL_API_KEY',
+        'ZOHO_API_URL',
         'WEBHOOK_URL',
         'WEBHOOK_SECRET',
         'PROTECTED_FIELDS',
@@ -589,6 +591,7 @@ app.post('/submit', async (c) => {
         const resolvedEmailApiKey = resolveSiteEnv(envRecord, 'EMAIL_API_KEY', resolvedSiteId) || '';
         const resolvedMailgunDomain = resolveSiteEnv(envRecord, 'MAILGUN_DOMAIN', resolvedSiteId);
         const resolvedMailtrapInboxId = resolveSiteEnv(envRecord, 'MAILTRAP_INBOX_ID', resolvedSiteId);
+        const resolvedZohoApiUrl = resolveSiteEnv(envRecord, 'ZOHO_API_URL', resolvedSiteId);
 
         // Send email notification (if configured and not quarantined as spam)
         const emailConfig: EmailConfig = {
@@ -598,6 +601,7 @@ app.post('/submit', async (c) => {
             to: resolvedEmailTo,
             mailgunDomain: resolvedMailgunDomain,
             mailtrapInboxId: resolvedMailtrapInboxId,
+            zohoApiUrl: resolvedZohoApiUrl,
             siteId: resolvedSiteId,
             protectedFields: resolvedProtectedFields,
         };
@@ -830,6 +834,7 @@ app.post('/email-test', async (c) => {
             to: c.env.EMAIL_TO || '',
             mailgunDomain: c.env.MAILGUN_DOMAIN,
             mailtrapInboxId: c.env.MAILTRAP_INBOX_ID,
+            zohoApiUrl: c.env.ZOHO_API_URL,
         };
 
         // Send email
@@ -1086,6 +1091,7 @@ export default {
             to: env.SPAM_DIGEST_EMAIL_TO || env.EMAIL_TO || '',
             mailgunDomain: env.MAILGUN_DOMAIN,
             mailtrapInboxId: env.MAILTRAP_INBOX_ID,
+            zohoApiUrl: env.ZOHO_API_URL,
         };
 
         const result = await generateAndSendSpamDigest(

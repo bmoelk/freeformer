@@ -16,6 +16,7 @@ FreeFormer supports multiple outbound email providers configured via environment
 | **Resend** | `resend` | `EMAIL_API_KEY`, `EMAIL_TO` | Modern developer email API. |
 | **SendGrid** | `sendgrid` | `EMAIL_API_KEY`, `EMAIL_TO` | Twilio SendGrid v3 Mail Send API. |
 | **Mailgun** | `mailgun` | `EMAIL_API_KEY`, `EMAIL_TO`, `MAILGUN_DOMAIN` | Mailgun Messages API. |
+| **Zoho CPaaS** | `zoho` (or `zoho_cpaas`, `zeptomail`) | `EMAIL_API_KEY`, `EMAIL_FROM`, `EMAIL_TO` | Zoho CPaaS / ZeptoMail email API (`https://cpaas.zoho.com/v1.1/email`). Optional `ZOHO_API_URL` override for regional or ZeptoMail domains. Send Mail Token is passed via `Authorization: Zoho-enczapikey <token>`. |
 | **Console Logger** | `console` | None | Prints formatted submission tables to Worker stdout (`wrangler tail`). |
 | **Disabled** | `none` | None | Skips email dispatching entirely. |
 
