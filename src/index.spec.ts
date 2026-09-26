@@ -9,7 +9,23 @@ import {
 } from './files';
 import { buildWebhookPayload, signWebhookPayload } from './webhook';
 import { verifyTurnstile } from './turnstile';
-import { parseEmailAddress, sendViaZoho, sendRawEmail, type EmailConfig, type RawEmailPayload } from './email';
+import {
+    parseEmailAddress,
+    parseEmailList,
+    sendViaZoho,
+    sendRawEmail,
+    getEmailAdapter,
+    registerEmailAdapter,
+    ConsoleEmailAdapter,
+    ResendEmailAdapter,
+    SendGridEmailAdapter,
+    MailgunEmailAdapter,
+    MailtrapEmailAdapter,
+    ZohoEmailAdapter,
+    type EmailConfig,
+    type RawEmailPayload,
+    type EmailAdapter,
+} from './email';
 
 describe('FreeFormer Unit Tests', () => {
     describe('getSiteEnvVariants', () => {
@@ -388,5 +404,109 @@ describe('FreeFormer Unit Tests', () => {
             });
         });
     });
+
+    describe('Polymorphic Email Adapter Architecture', () => {
+        describe('parseEmailList', () => {
+            it('parses multiple comma-separated emails with mixed formats', () => {
+                const list = parseEmailList('alice@example.com, Bob <bob@example.com>, "Charlie D" <charlie@example.com>');
+                expect(list).toEqual([
+                    { address: 'alice@example.com' },
+                    { address: 'bob@example.com', name: 'Bob' },
+                    { address: 'charlie@example.com', name: 'Charlie D' },
+                ]);
+            });
+
+            it('filters out empty or whitespace entries', () => {
+                const list = parseEmailList('  ,  user@example.com , , ');
+                expect(list).toEqual([{ address: 'user@example.com' }]);
+            });
+        });
+
+        describe('Adapter Registry & Factory', () => {
+            it('resolves correct adapter instance for each supported provider', () => {
+                const baseConfig: EmailConfig = {
+                    provider: 'console',
+                    apiKey: 'test-key',
+                    from: 'from@example.com',
+                    to: 'to@example.com',
+                };
+
+                expect(getEmailAdapter({ ...baseConfig, provider: 'console' })).toBeInstanceOf(ConsoleEmailAdapter);
+                expect(getEmailAdapter({ ...baseConfig, provider: 'resend' })).toBeInstanceOf(ResendEmailAdapter);
+                expect(getEmailAdapter({ ...baseConfig, provider: 'sendgrid' })).toBeInstanceOf(SendGridEmailAdapter);
+                expect(getEmailAdapter({ ...baseConfig, provider: 'mailgun' })).toBeInstanceOf(MailgunEmailAdapter);
+                expect(getEmailAdapter({ ...baseConfig, provider: 'mailtrap' })).toBeInstanceOf(MailtrapEmailAdapter);
+                expect(getEmailAdapter({ ...baseConfig, provider: 'zoho' })).toBeInstanceOf(ZohoEmailAdapter);
+                expect(getEmailAdapter({ ...baseConfig, provider: 'zoho_cpaas' })).toBeInstanceOf(ZohoEmailAdapter);
+                expect(getEmailAdapter({ ...baseConfig, provider: 'zeptomail' })).toBeInstanceOf(ZohoEmailAdapter);
+            });
+
+            it('returns null for unknown provider', () => {
+                const adapter = getEmailAdapter({
+                    provider: 'unsupported' as any,
+                    apiKey: 'key',
+                    from: 'a@b.com',
+                    to: 'c@d.com',
+                });
+                expect(adapter).toBeNull();
+            });
+
+            it('allows registering custom email adapters', async () => {
+                class MockCustomAdapter implements EmailAdapter {
+                    readonly name = 'custom_mock';
+                    async send(_payload: RawEmailPayload) {
+                        return { success: true };
+                    }
+                }
+
+                registerEmailAdapter('custom_mock', (_cfg) => new MockCustomAdapter());
+
+                const adapter = getEmailAdapter({
+                    provider: 'custom_mock' as any,
+                    apiKey: 'key',
+                    from: 'a@b.com',
+                    to: 'c@d.com',
+                });
+
+                expect(adapter).toBeInstanceOf(MockCustomAdapter);
+                const res = await adapter!.send({ subject: 's', html: 'h', text: 't' });
+                expect(res.success).toBe(true);
+            });
+        });
+
+        describe('sendRawEmail edge cases', () => {
+            it('returns success and skips dispatch when provider is "none"', async () => {
+                const res = await sendRawEmail({
+                    provider: 'none',
+                    apiKey: '',
+                    from: '',
+                    to: '',
+                }, { subject: 's', html: 'h', text: 't' });
+                expect(res.success).toBe(true);
+            });
+
+            it('returns error when unknown email provider is configured', async () => {
+                const res = await sendRawEmail({
+                    provider: 'bogus_provider' as any,
+                    apiKey: 'key',
+                    from: 'from@example.com',
+                    to: 'to@example.com',
+                }, { subject: 's', html: 'h', text: 't' });
+                expect(res.success).toBe(false);
+                expect(res.error).toContain('Unknown email provider');
+            });
+
+            it('skips dispatch when non-console provider is missing apiKey or to', async () => {
+                const res = await sendRawEmail({
+                    provider: 'resend',
+                    apiKey: '',
+                    from: 'from@example.com',
+                    to: 'to@example.com',
+                }, { subject: 's', html: 'h', text: 't' });
+                expect(res.success).toBe(true);
+            });
+        });
+    });
 });
+
 
