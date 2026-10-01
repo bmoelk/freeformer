@@ -3,11 +3,61 @@
 ================================================================================
 Summary for: {{periodStart}} to {{periodEnd}}
 
-METRICS:
+EXECUTIVE METRICS:
+- Total Submissions: {{totalSubmissions}}
+- Clean Forwarded: {{cleanSubmissions}}
 - Quarantined Spam: {{spamSubmissions}}
-- Clean Submissions: {{cleanSubmissions}}
 - Spam Ratio: {{spamPercentage}}
 
+{{#hasLegitItems}}
+--------------------------------------------------------------------------------
+📨 LEGITIMATE INQUIRIES FOLLOW-UP:
+--------------------------------------------------------------------------------
+{{#isDeduplicatedList}}
+{{#allLegitItems}}
+• Date: {{timestamp}}
+  Site: {{siteId}} | Form: {{formId}}
+  Sender: {{senderName}} <{{senderEmail}}>
+  Snippet: "{{snippet}}"
+{{/allLegitItems}}
+{{/isDeduplicatedList}}
+{{^isDeduplicatedList}}
+[⏰ Ensure Follow-up (Earliest Clean Inquiries)]
+{{#earliestLegitItems}}
+• Date: {{timestamp}} | Site: {{siteId}} ({{formId}})
+  Sender: {{senderName}} <{{senderEmail}}>
+  Snippet: "{{snippet}}"
+{{/earliestLegitItems}}
+
+[🔔 Recent Reminder (Latest Clean Inquiries)]
+{{#latestLegitItems}}
+• Date: {{timestamp}} | Site: {{siteId}} ({{formId}})
+  Sender: {{senderName}} <{{senderEmail}}>
+  Snippet: "{{snippet}}"
+{{/latestLegitItems}}
+{{/isDeduplicatedList}}
+{{/hasLegitItems}}
+
+{{#hasQuestionableSpam}}
+--------------------------------------------------------------------------------
+⚠️ QUESTIONABLE / BORDERLINE SPAM (HUMAN REVIEW & TUNING):
+--------------------------------------------------------------------------------
+{{#questionableSpamItems}}
+• Date: {{timestamp}}
+  Site: {{siteId}} | Form: {{formId}}
+  Sender: {{senderName}} <{{senderEmail}}>
+  Score: {{score}}/100 (Tier: {{confidenceTier}})
+  Top Reason: {{topReason}}
+  Snippet: "{{snippet}}"
+--------------------------------------------------------------------------------
+{{/questionableSpamItems}}
+{{#highConfidenceSpamCount}}
+🛡️ {{highConfidenceSpamCount}} additional high-confidence spam submissions were automatically quarantined.
+{{/highConfidenceSpamCount}}
+{{/hasQuestionableSpam}}
+{{^hasQuestionableSpam}}
+{{#items.length}}
+--------------------------------------------------------------------------------
 QUARANTINED SUBMISSIONS ({{spamSubmissions}}):
 --------------------------------------------------------------------------------
 {{#items}}
@@ -19,9 +69,11 @@ QUARANTINED SUBMISSIONS ({{spamSubmissions}}):
   Snippet: "{{snippet}}"
 --------------------------------------------------------------------------------
 {{/items}}
+{{/items.length}}
+{{/hasQuestionableSpam}}
 
 {{#adminUrl}}
-Review quarantined submissions in your Zero-Trust Admin dashboard:
+Zero-Trust Admin Dashboard:
 {{adminUrl}}
 {{/adminUrl}}
 

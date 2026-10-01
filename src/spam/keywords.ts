@@ -3,11 +3,83 @@
  * Categorized and weighted pattern matching for contact form spam.
  */
 
+export type SpamCategory =
+  | 'seo'
+  | 'crypto'
+  | 'phishing'
+  | 'pharma_adult'
+  | 'shortener'
+  | 'markup';
+
+export const ALL_SPAM_CATEGORIES: readonly SpamCategory[] = [
+  'seo',
+  'crypto',
+  'phishing',
+  'pharma_adult',
+  'shortener',
+  'markup',
+] as const;
+
 export interface SpamPattern {
   name: string;
-  category: 'seo' | 'crypto' | 'phishing' | 'pharma_adult' | 'shortener' | 'markup';
+  category: SpamCategory;
   weight: number;
   regex: RegExp;
+}
+
+/**
+ * Normalizes input categories into a typed Set of active SpamCategory values.
+ * Supports:
+ * - Empty / undefined / 'all' / '*' -> all categories
+ * - 'none' -> empty set (disables keyword pattern matching)
+ * - Comma-separated strings (e.g. 'seo,crypto') or string arrays
+ * - Common aliases (e.g. 'pharma' | 'adult' -> 'pharma_adult')
+ */
+export function normalizeSpamCategories(
+  input?: string | string[] | SpamCategory[]
+): Set<SpamCategory> {
+  if (!input) {
+    return new Set(ALL_SPAM_CATEGORIES);
+  }
+
+  const rawList: string[] = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+    ? input.split(',').map((s) => s.trim().toLowerCase())
+    : [];
+
+  if (rawList.length === 0) {
+    return new Set(ALL_SPAM_CATEGORIES);
+  }
+
+  // Check for 'all' or '*'
+  if (rawList.some((s) => s === 'all' || s === '*')) {
+    return new Set(ALL_SPAM_CATEGORIES);
+  }
+
+  // Check for explicit 'none'
+  if (rawList.some((s) => s === 'none')) {
+    return new Set();
+  }
+
+  const result = new Set<SpamCategory>();
+  for (const item of rawList) {
+    const cleaned = item.trim().toLowerCase();
+    if (!cleaned) continue;
+
+    // Direct match
+    if ((ALL_SPAM_CATEGORIES as readonly string[]).includes(cleaned)) {
+      result.add(cleaned as SpamCategory);
+      continue;
+    }
+
+    // Aliases
+    if (cleaned === 'pharma' || cleaned === 'adult') {
+      result.add('pharma_adult');
+    }
+  }
+
+  return result;
 }
 
 export const SPAM_PATTERNS: SpamPattern[] = [

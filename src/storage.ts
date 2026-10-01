@@ -3,6 +3,7 @@ import { type Logger } from './logger';
 import { type SpamAnalysisResult } from './spam/types';
 
 export interface FormSubmission {
+    id?: string;
     formId: string;
     siteId: string;
     data: Record<string, any>;
@@ -46,7 +47,7 @@ export async function storeSubmission(
     db?: D1Database,
     logger?: Logger
 ): Promise<string> {
-    const submissionId = nanoid();
+    const submissionId = (submission as any).id || (submission as any).submissionId || nanoid();
     const site = submission.siteId;
     
     // Ensure attachments are represented in metadata for D1 storage
@@ -107,6 +108,51 @@ export async function storeSubmission(
     }
 
     return submissionId;
+}
+
+/**
+ * Update the metadata of an existing submission (used for asynchronous triage e.g. Sys1Pop)
+ */
+export async function updateSubmissionMetadata(
+    submissionId: string,
+    siteId: string,
+    formId: string,
+    metadataUpdater: (prev: Record<string, any>) => Record<string, any>,
+    kv?: KVNamespace,
+    db?: D1Database,
+    logger?: Logger
+): Promise<boolean> {
+    if (db) {
+        const row: any = await db.prepare('SELECT metadata FROM submissions WHERE id = ?').bind(submissionId).first();
+        if (row) {
+            const prevMetadata = JSON.parse(row.metadata || '{}');
+            const newMetadata = metadataUpdater(prevMetadata);
+            await db.prepare('UPDATE submissions SET metadata = ? WHERE id = ?')
+                .bind(JSON.stringify(newMetadata), submissionId)
+                .run();
+            logger?.debug('Storage', `Updated submission ${submissionId} metadata in D1`);
+            return true;
+        }
+    } else if (kv) {
+        const cleanSite = siteId ? siteId.trim().toLowerCase() : '';
+        const cleanForm = formId ? formId.trim() : '';
+        const key = `submission:${cleanSite}:${cleanForm}:${submissionId}`;
+        const existing = (await kv.get(key, 'json')) as StoredSubmission | null;
+        if (existing) {
+            const newMetadata = metadataUpdater(existing.metadata || {});
+            existing.metadata = newMetadata as any;
+            await kv.put(key, JSON.stringify(existing), {
+                metadata: {
+                    formId: cleanForm,
+                    siteId: cleanSite,
+                    timestamp: existing.metadata.timestamp,
+                },
+            });
+            logger?.debug('Storage', `Updated submission ${submissionId} metadata in KV`);
+            return true;
+        }
+    }
+    return false;
 }
 
 /**

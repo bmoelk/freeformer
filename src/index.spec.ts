@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { getSiteEnvVariants, resolveSiteEnv } from './index';
+import { getSiteEnvVariants, resolveSiteEnv, app } from './index';
 import { matchesPattern, isFieldProtected, sanitizeSubmissionData } from './templates';
 import {
     sanitizeFilename,
@@ -505,6 +505,102 @@ describe('FreeFormer Unit Tests', () => {
                 }, { subject: 's', html: 'h', text: 't' });
                 expect(res.success).toBe(true);
             });
+        });
+    });
+
+    describe('Spam Configuration Environment Resolution', () => {
+        it('resolves site-specific SPAM_CATEGORIES overrides', () => {
+            const env = {
+                SPAM_CATEGORIES: 'all',
+                SPAM_CATEGORIES_SPLITPHASE_IO: 'crypto,phishing',
+            };
+            const splitphaseCategories = resolveSiteEnv(env, 'SPAM_CATEGORIES', 'splitphase.io');
+            expect(splitphaseCategories).toBe('crypto,phishing');
+
+            const fallbackCategories = resolveSiteEnv(env, 'SPAM_CATEGORIES', 'otherdomain.com');
+            expect(fallbackCategories).toBe('all');
+        });
+
+        it('resolves site-specific SPAM_DIGEST_MODE overrides', () => {
+            const env = {
+                SPAM_DIGEST_MODE: 'comprehensive',
+                SPAM_DIGEST_MODE_QUIET_COM: 'spam_only',
+            };
+            const quietMode = resolveSiteEnv(env, 'SPAM_DIGEST_MODE', 'quiet.com');
+            expect(quietMode).toBe('spam_only');
+
+            const defaultMode = resolveSiteEnv(env, 'SPAM_DIGEST_MODE', 'other.com');
+            expect(defaultMode).toBe('comprehensive');
+        });
+    });
+
+    describe('Root Diagnostic Health Endpoint (GET /)', () => {
+        it('reports SYS1POP in configuredKeys and sys1popConfigured when provided as string URL', async () => {
+            const mockEnv = {
+                SYS1POP: 'sys1pop.brainendeavor.com',
+                SYS1POP_MODEL: 'spam-detector-v1',
+                SYS1POP_API_TOKEN: 'test-token',
+            };
+            const res = await app.request('/', {}, mockEnv);
+            expect(res.status).toBe(200);
+            const body = await res.json() as any;
+            expect(body.config.sys1popConfigured).toBe(true);
+            expect(body.config.sys1popModel).toBe('spam-detector-v1');
+            expect(body.config.sys1popTokenConfigured).toBe(true);
+            expect(body.config.configuredKeys).toContain('SYS1POP');
+            expect(body.config.configuredKeys).toContain('SYS1POP_MODEL');
+            expect(body.config.configuredKeys).toContain('SYS1POP_API_TOKEN');
+        });
+
+        it('reports SYS1POP in configuredKeys when provided as service binding', async () => {
+            const mockEnv = {
+                SYS1POP: { fetch: vi.fn() },
+            };
+            const res = await app.request('/', {}, mockEnv);
+            expect(res.status).toBe(200);
+            const body = await res.json() as any;
+            expect(body.config.sys1popConfigured).toBe(true);
+            expect(body.config.configuredKeys).toContain('SYS1POP');
+        });
+
+        it('executes live probe on GET /?probe=sys1pop without throwing 500', async () => {
+            const mockEnv = {
+                SYS1POP: {
+                    async fetch() {
+                        return new Response(
+                            JSON.stringify({
+                                decisions: {
+                                    is_spam: { type: 'boolean', value: false, probability: 0.01 },
+                                    spam_category: { type: 'choice', winner: 'legitimate_inquiry', confidence: 0.99, distribution: {} },
+                                    risk_score: { type: 'score', expected_value: 1.0, distribution: [] },
+                                },
+                                metrics: { total_ms: 10 },
+                                cached: true,
+                            }),
+                            { status: 200, headers: { 'Content-Type': 'application/json' } }
+                        );
+                    },
+                },
+            };
+            const res = await app.request('/?probe=sys1pop', {}, mockEnv);
+            expect(res.status).toBe(200);
+            const body = await res.json() as any;
+            expect(body.sys1popProbe).toBeDefined();
+            expect(body.sys1popProbe.success).toBe(true);
+            expect(body.sys1popProbe.verdict.isSpam).toBe(false);
+        });
+
+        it('executes /sys1pop-test successfully without throwing 500', async () => {
+            const mockEnv = {
+                SYS1POP: 'https://sys1pop.example.com',
+            };
+            const res = await app.request('/sys1pop-test', {}, mockEnv);
+            // Since network fetch to example.com is not mocked, probe returns configured=true, success=false with 502 or error status
+            expect([200, 502]).toContain(res.status);
+            const body = await res.json() as any;
+            expect(body.service).toBe('FreeFormer');
+            expect(body.target).toBe('Sys1Pop');
+            expect(body.configured).toBe(true);
         });
     });
 });

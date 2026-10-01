@@ -77,6 +77,19 @@
       "description": "Optional comma-separated list of custom site-specific spam keywords to flag."
     },
     {
+      "name": "SPAM_CATEGORIES",
+      "kind": "Var",
+      "required": false,
+      "default": "all",
+      "description": "Comma-separated list of spam pattern categories to evaluate (seo, crypto, phishing, pharma_adult, shortener, markup, or all)."
+    },
+    {
+      "name": "SPAM_CATEGORIES_${SITE_ID}",
+      "kind": "Var",
+      "required": false,
+      "description": "Per-site spam pattern categories override (e.g. SPAM_CATEGORIES_SPLITPHASE_IO)."
+    },
+    {
       "name": "SPAM_DIGEST_ENABLED",
       "kind": "Var",
       "required": false,
@@ -84,10 +97,49 @@
       "description": "Enable weekly email summaries of quarantined spam submissions (true / false)."
     },
     {
+      "name": "SPAM_DIGEST_MODE",
+      "kind": "Var",
+      "required": false,
+      "default": "comprehensive",
+      "description": "Weekly digest content mode: 'comprehensive' (full activity report, follow-up/reminder legit inquiries, borderline spam spotlight) or 'spam_only' (zero-noise quarantined spam summary only).",
+      "options": ["comprehensive", "spam_only"]
+    },
+    {
       "name": "SPAM_DIGEST_EMAIL_TO",
       "kind": "Var/Secret",
       "required": false,
       "description": "Recipient email address for periodic spam digests (falls back to EMAIL_TO if omitted)."
+    },
+    {
+      "name": "SYS1POP",
+      "kind": "Binding/Var",
+      "required": false,
+      "description": "Optional Cloudflare Service Binding (or HTTP endpoint URL) to the Sys1Pop edge decision engine for neural spam triage."
+    },
+    {
+      "name": "SYS1POP_MODEL",
+      "kind": "Var",
+      "required": false,
+      "default": "spam-detector-v1",
+      "description": "Model ID to evaluate via Sys1Pop neural edge decision engine (defaults to 'spam-detector-v1')."
+    },
+    {
+      "name": "SYS1POP_MODEL_${SITE_ID}",
+      "kind": "Var",
+      "required": false,
+      "description": "Per-site Sys1Pop neural triage model override (e.g. SYS1POP_MODEL_SPLITPHASE_IO)."
+    },
+    {
+      "name": "SYS1POP_API_TOKEN",
+      "kind": "Secret",
+      "required": false,
+      "description": "Optional Bearer API token for authenticating calls to the Sys1Pop edge decision service binding or endpoint."
+    },
+    {
+      "name": "SYS1POP_API_TOKEN_${SITE_ID}",
+      "kind": "Secret",
+      "required": false,
+      "description": "Per-site Sys1Pop Bearer API token override (e.g. SYS1POP_API_TOKEN_SPLITPHASE_IO)."
     },
     {
       "name": "STORAGE_ENGINE",

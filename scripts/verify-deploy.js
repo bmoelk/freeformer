@@ -58,7 +58,7 @@ function getLocalConfig() {
   const plaintextSecretViolations = [];
 
   // Known secret key patterns that must NEVER be in [vars]
-  const isSecretKey = (key) => /^(?:TURNSTILE_SECRET_KEY|API_KEY)(?:_[A-Z0-9_]+)?$/.test(key);
+  const isSecretKey = (key) => /^(?:TURNSTILE_SECRET_KEY|API_KEY|SYS1POP_API_TOKEN)(?:_[A-Z0-9_]+)?$/.test(key);
   const isFrontendOnlyKey = (key) => /^TURNSTILE_SITE_KEY(?:_[A-Z0-9_]+)?$/.test(key);
 
   // 1. Read .dev.vars
@@ -120,6 +120,12 @@ function getLocalConfig() {
     for (const match of d1Matches) {
       localKeys.add(match[1]);
     }
+
+    // Check bound services in overrides (e.g. SYS1POP)
+    const serviceMatches = content.matchAll(/\[\[services\]\][^\[]*binding\s*=\s*"([^"]+)"/g);
+    for (const match of serviceMatches) {
+      localKeys.add(match[1]);
+    }
   }
 
   return {
@@ -131,6 +137,7 @@ function getLocalConfig() {
 
 async function verifyDeployment() {
   const targetUrl = process.argv[2] || DEFAULT_URL;
+  const probeUrl = targetUrl + (targetUrl.includes('?') ? '&' : '?') + 'probe=sys1pop';
   const manifest = loadManifest();
 
   console.log(`\n========================================================================`);
@@ -139,7 +146,7 @@ async function verifyDeployment() {
   console.log(`Target Worker:   ${targetUrl}`);
 
   try {
-    const response = await fetchJson(targetUrl);
+    const response = await fetchJson(probeUrl);
 
     if (response.statusCode !== 200 || !response.data) {
       console.log(`\n❌ Worker returned status code: ${response.statusCode}`);
@@ -225,14 +232,37 @@ async function verifyDeployment() {
     // 4. Rate Limiting Check
     console.log(`  • Rate Limiting:    ${config.rateLimitEnabled ? '✅ Enabled' : 'ℹ️  Disabled'}`);
 
-    // 5. Multi-Tenant Per-Site Consistency Check
+    // 5. Sys1Pop Neural Edge AI Triage Check
+    if (!config.sys1popConfigured) {
+      console.log(`  • Sys1Pop Neural AI: ℹ️  NOT BOUND (Progressive enhancement unconfigured; heuristics active)`);
+    } else {
+      const probe = response.data.sys1popProbe;
+      if (!probe) {
+        console.log(`  • Sys1Pop Neural AI: ⚠️ BOUND (Model: ${config.sys1popModel || 'spam-detector-v1'}, live probe not supported by remote worker)`);
+      } else if (probe.success) {
+        console.log(`  • Sys1Pop Neural AI: ✅ CONNECTED & OPERATIONAL (${probe.latencyMs}ms)`);
+        console.log(`    - Target Model:    ${probe.model}`);
+        console.log(`    - Auth Token:      ${probe.tokenConfigured ? '✅ Active (Bearer)' : 'ℹ️  Unset / None'}`);
+        if (probe.verdict) {
+          const conf = (probe.verdict.confidence * 100).toFixed(1);
+          console.log(`    - Probe Decision:  ${probe.verdict.category} (Risk: ${probe.verdict.riskScore}/5, Conf: ${conf}%)`);
+        }
+      } else {
+        console.log(`  • Sys1Pop Neural AI: ❌ CONNECTION FAILED!`);
+        console.log(`    - Target Model:    ${probe.model}`);
+        console.log(`    - Error:           ${probe.error}`);
+        warnings.push(`Sys1Pop is bound but live connection probe failed: ${probe.error}`);
+      }
+    }
+
+    // 6. Multi-Tenant Per-Site Consistency Check
     const local = getLocalConfig();
     const remoteKeySet = new Set(config.configuredKeys || []);
 
     // Detect all referenced site IDs from local config (e.g. BRAINENDEAVOR, SPLITPHASE)
     const siteIds = new Set();
     for (const key of local.keys) {
-      const match = key.match(/^(?:TURNSTILE_SECRET_KEY|EMAIL_TO|EMAIL_FROM|EMAIL_PROVIDER|EMAIL_API_KEY|ZOHO_API_URL|WEBHOOK_URL)_([A-Z0-9_]+)$/);
+      const match = key.match(/^(?:TURNSTILE_SECRET_KEY|EMAIL_TO|EMAIL_FROM|EMAIL_PROVIDER|EMAIL_API_KEY|ZOHO_API_URL|WEBHOOK_URL|SYS1POP|SYS1POP_API_TOKEN|SYS1POP_MODEL)_([A-Z0-9_]+)$/);
       if (match) {
         siteIds.add(match[1]);
       }

@@ -1,0 +1,50 @@
+[
+  {
+    "text": "Hi, I am interested in hiring your agency to build a custom e-commerce portal on Shopify. Can we schedule an intro call next week?",
+    "is_spam": false,
+    "category": "legitimate_inquiry",
+    "risk_score": 1
+  },
+  {
+    "text": "Hello FreeFormer team, your website contact form seems to have an SSL warning on Safari. Thought you should know!",
+    "is_spam": false,
+    "category": "legitimate_inquiry",
+    "risk_score": 1
+  },
+  {
+    "text": "Boost your website traffic by 500% with our automated backlink package! 1000 guest posts for just $99. Reply to get started.",
+    "is_spam": true,
+    "category": "seo_backlink_spam",
+    "risk_score": 4
+  },
+  {
+    "text": "Dear webmaster, we noticed your ranking dropped on Google. We provide high-DA PBN links guaranteed to push you to #1.",
+    "is_spam": true,
+    "category": "seo_backlink_spam",
+    "risk_score": 4
+  },
+  {
+    "text": "We sell high quality business leads in B2B SaaS. Contact our sales rep on Telegram @sales_pro for a free sample list.",
+    "is_spam": true,
+    "category": "commercial_sales_pitch",
+    "risk_score": 3
+  },
+  {
+    "text": "URGENT: Your domain registration has expired! Click here to update your payment method immediately or your site will be deleted.",
+    "is_spam": true,
+    "category": "crypto_phishing",
+    "risk_score": 5
+  },
+  {
+    "text": "Claim 5,000 USDT airdrop bonus on Uniswap v3. Connect your wallet to claim before snapshot ends.",
+    "is_spam": true,
+    "category": "crypto_phishing",
+    "risk_score": 5
+  },
+  {
+    "text": "asdfkjhsdf sdkfjhsdkfj 8374928374 hksjdfhsdkjfh asdjkhf ksdjfhskdjfh http://xyz123.top/bot",
+    "is_spam": true,
+    "category": "automated_bot_gibberish",
+    "risk_score": 5
+  }
+]

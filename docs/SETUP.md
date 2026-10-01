@@ -194,8 +194,16 @@ All configuration parameters and secrets supported by FreeFormer are summarized 
 | `SPAM_THRESHOLD` | Var | Optional | `60` | Spam score threshold (0-100). Submissions at or above this score are quarantined and instant email notifications are suppressed. |
 | `SPAM_HONEYPOT_FIELDS` | Var | Optional | `_hp,website,company_url` | Comma-separated list of form field names treated as honeypot traps for bots. |
 | `SPAM_KEYWORDS` | Var | Optional | - | Optional comma-separated list of custom site-specific spam keywords to flag. |
+| `SPAM_CATEGORIES` | Var | Optional | `all` | Comma-separated list of spam pattern categories to evaluate (seo, crypto, phishing, pharma_adult, shortener, markup, or all). |
+| `SPAM_CATEGORIES_${SITE_ID}` | Var | Optional | - | Per-site spam pattern categories override (e.g. SPAM_CATEGORIES_SPLITPHASE_IO). |
 | `SPAM_DIGEST_ENABLED` | Var | Optional | `true` | Enable weekly email summaries of quarantined spam submissions (true / false). |
+| `SPAM_DIGEST_MODE` | Var | Optional | `comprehensive` | Weekly digest content mode: 'comprehensive' (full activity report, follow-up/reminder legit inquiries, borderline spam spotlight) or 'spam_only' (zero-noise quarantined spam summary only). |
 | `SPAM_DIGEST_EMAIL_TO` | Var/Secret | Optional | - | Recipient email address for periodic spam digests (falls back to EMAIL_TO if omitted). |
+| `SYS1POP` | Binding/Var | Optional | - | Optional Cloudflare Service Binding (or HTTP endpoint URL) to the Sys1Pop edge decision engine for neural spam triage. |
+| `SYS1POP_MODEL` | Var | Optional | `spam-detector-v1` | Model ID to evaluate via Sys1Pop neural edge decision engine (defaults to 'spam-detector-v1'). |
+| `SYS1POP_MODEL_${SITE_ID}` | Var | Optional | - | Per-site Sys1Pop neural triage model override (e.g. SYS1POP_MODEL_SPLITPHASE_IO). |
+| `SYS1POP_API_TOKEN` | Secret | Optional | - | Optional Bearer API token for authenticating calls to the Sys1Pop edge decision service binding or endpoint. |
+| `SYS1POP_API_TOKEN_${SITE_ID}` | Secret | Optional | - | Per-site Sys1Pop Bearer API token override (e.g. SYS1POP_API_TOKEN_SPLITPHASE_IO). |
 | `STORAGE_ENGINE` | Var | Yes | `kv` | Primary storage engine for form submissions (kv, d1, none). |
 | `EMAIL_PROVIDER` | Var | Optional | `none` | Outbound email provider (none, console, mailtrap, resend, sendgrid, mailgun, zoho). |
 | `EMAIL_FROM` | Var/Secret | Required (Required when EMAIL_PROVIDER is not 'none' or 'console') | - | Outbound 'From' email address (e.g. contact@yourdomain.com). |
@@ -279,6 +287,119 @@ The webhook payload will look like this:
 Headers included:
 - `X-FreeFormer-Event`: `submission`
 - `X-FreeFormer-Signature`: Your `API_KEY` (if configured)
+
+## Step 12: Configure Sys1Pop Neural Edge Triage (Optional)
+
+FreeFormer includes native progressive enhancement with **Sys1Pop**, an edge-native System 1 decision engine executing in WebAssembly (Candle + SIMD128). 
+
+> [!NOTE]
+> **Zero Downtime Fallback**: If Sys1Pop is unconfigured or unavailable, FreeFormer operates 100% on its built-in heuristic spam engine with zero errors and no degradation in performance.
+
+When configured, FreeFormer automatically dispatches ambiguous submissions (heuristic scores between 30 and 59) to Sys1Pop asynchronously inside `ctx.waitUntil()` for neural evaluation without adding any latency to the client response (< 30ms TTFB).
+
+### 1. Attach the Sys1Pop Service Binding or Endpoint
+
+In your `wrangler.overrides.toml`, attach the Service Binding:
+
+```toml
+# wrangler.overrides.toml
+[[services]]
+binding = "SYS1POP"
+service = "sys1pop"
+```
+
+*(Alternatively, for external or local development instances, you can specify an HTTP endpoint URL under `[vars]` or in `.dev.vars`):*
+
+```toml
+# wrangler.overrides.toml or .dev.vars
+[vars]
+SYS1POP = "https://sys1pop.your-subdomain.workers.dev"
+# or for local dev: SYS1POP = "http://localhost:6061"
+```
+
+### 2. Configure Sys1Pop Authentication Token (Optional)
+
+If your Sys1Pop worker or endpoint requires authentication, set the `SYS1POP_API_TOKEN` secret:
+
+```bash
+npx wrangler secret put SYS1POP_API_TOKEN
+# Enter your Sys1Pop Bearer API token when prompted
+```
+
+For multi-tenant setups with distinct tokens per site:
+```bash
+npx wrangler secret put SYS1POP_API_TOKEN_SPLITPHASE_IO
+```
+
+When set, FreeFormer automatically transmits `Authorization: Bearer <token>` on all requests dispatched to Sys1Pop.
+
+### 3. Configure the Neural Triage Model (Optional)
+
+By default, FreeFormer evaluates submissions using the standard `"spam-detector-v1"` foundation model calibrated specifically for contact form spam triage (`is_spam`, `spam_category`, and `risk_score`). 
+
+To use a custom or fine-tuned model (e.g., from Project ModelForge):
+
+```toml
+# wrangler.overrides.toml
+[vars]
+SYS1POP_MODEL = "custom-spam-model-v2"
+
+# Per-site model override:
+SYS1POP_MODEL_SPLITPHASE_IO = "splitphase-custom-v1"
+```
+
+### 4. Programmatic Verification & Health Diagnostics
+
+Because Sys1Pop executes asynchronously inside `ctx.waitUntil()` for submissions with borderline heuristic scores (30–59), FreeFormer provides built-in mechanisms to verify Sys1Pop connectivity, model loading, and authentication without needing to submit dummy spam forms:
+
+#### Method A: Automated Deployment Verification (`verify-deploy`)
+Run the post-deployment verification script. It automatically queries the deployed Worker with `?probe=sys1pop` to perform a live inference pass and reports latency, model residency, and authentication status:
+
+```bash
+npm run verify-deploy
+# or: node scripts/verify-deploy.js https://contact.splitphase.io
+```
+
+Output:
+```text
+• Sys1Pop Neural AI: ✅ CONNECTED & OPERATIONAL (14ms)
+  - Target Model:    spam-detector-v1
+  - Auth Token:      ✅ Active (Bearer)
+  - Probe Decision:  legitimate_inquiry (Risk: 1.0/5, Conf: 99.2%)
+```
+
+#### Method B: Standalone Diagnostic Probe Endpoint (`/sys1pop-test`)
+Query the dedicated `/sys1pop-test` diagnostic endpoint directly from curl or monitoring scripts:
+
+```bash
+# Test default site configuration:
+curl https://contact.splitphase.io/sys1pop-test
+
+# Test specific multi-tenant site overrides:
+curl https://contact.splitphase.io/sys1pop-test?siteId=brainendeavor.com
+```
+
+Response (`HTTP 200 OK` on success, `HTTP 502 Bad Gateway` if Sys1Pop fails):
+```json
+{
+  "service": "FreeFormer",
+  "target": "Sys1Pop",
+  "siteId": "splitphase.io",
+  "configured": true,
+  "endpointType": "binding",
+  "model": "spam-detector-v1",
+  "tokenConfigured": true,
+  "success": true,
+  "latencyMs": 14,
+  "cached": true,
+  "verdict": {
+    "isSpam": false,
+    "confidence": 0.992,
+    "category": "legitimate_inquiry",
+    "riskScore": 1.0
+  }
+}
+```
 
 ## Testing Your Setup
 

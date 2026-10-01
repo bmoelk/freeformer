@@ -12,8 +12,8 @@ FreeFormer provides a complete, edge-native backend for collecting form submissi
 
 ## ✨ Key Features
 
-* 🛡️ **Two-Tier Spam Protection** — Cloudflare Turnstile token validation paired with an edge-native heuristic spam engine (`v1.0.0`) analyzing honeypot traps, submission velocity, link density, and burner email domains.
-* 📦 **Configurable Quarantine & Zero-Noise Digests** — Submissions exceeding the spam threshold (`SPAM_THRESHOLD=60`) are quarantined in storage without triggering instant inbox alerts; automated weekly digests are sent *only* if spam was caught.
+* 🛡️ **Three-Tier Progressive Spam Protection** — Cloudflare Turnstile token validation paired with an edge-native heuristic spam engine (`SPAM_ENGINE_VERSION = "1.0.0"`) and optional deep neural triage via **Sys1Pop** for ambiguous edge cases.
+* 📦 **Configurable Quarantine & Weekly Digests** — Submissions exceeding the spam threshold (`SPAM_THRESHOLD=60`) are quarantined in storage without triggering instant inbox alerts; automated weekly digests deliver executive activity summaries, legit inquiry follow-ups, and spotlight borderline spam for review.
 * 💾 **Flexible Storage** — Choose between Cloudflare KV (key-value) or D1 (SQLite SQL) databases.
 * 🔗 **Webhooks & Real-time Dispatch** — Trigger HTTP POST webhooks on form submissions with global (`WEBHOOK_URL`) and per-site (`WEBHOOK_URL_${SITE_ID}`) routing.
 * 🛠️ **Interactive Setup Wizard** — Run `npm run setup` for guided configuration and clear manifest summaries.
@@ -174,6 +174,60 @@ For complete custom control, you can post directly to the `/submit` endpoint:
 </body>
 </html>
 ```
+
+---
+
+## 🧠 Optional Neural Edge AI Spam Triage (Sys1Pop)
+
+FreeFormer supports **Progressive Enhancement** via [Sys1Pop](https://github.com/brainendeavor/Sys1Pop), an autonomous "System 1" edge decision engine running INT8 Candle WASM models in Cloudflare Workers.
+
+### How It Works
+
+```
+Form Submission
+      │
+      ▼
+Tier 1: Cloudflare Turnstile (Bot & Captcha Gating)
+      │
+      ▼
+Tier 2: Native Heuristic Engine (0ms CPU Overhead)
+      ├─ Score < 30  ──► Instant Accept (Clean)
+      ├─ Score >= 60 ──► Instant Quarantine (Definite Spam)
+      ▼
+Tier 3: Ambiguous Score (30 <= Score < 60)
+      │
+      ├─► SYS1POP Service Binding Bound?
+      │     ├─ NO  ──► Use Heuristic Verdict (Zero Downtime / Zero Dependencies)
+      │     └─ YES ──► Deep Neural Evaluation (<0.2ms IPC, FreeFormer-Spam INT8 Model)
+      │                  • is_spam (calibrated boolean)
+      │                  • spam_category (commercial_sales, seo_backlink, crypto_phishing, bot_gibberish)
+      │                  • risk_score (1 to 5 risk tier)
+```
+
+### Zero-Downtime Progressive Enhancement
+
+* **Unconfigured (Default):** If `SYS1POP` is not bound, FreeFormer operates 100% on native heuristics with **zero external dependencies, 0ms overhead, and no service disruption**.
+* **Bound & Active:** If `SYS1POP` is bound, ambiguous submissions are triaged in `<0.2ms` isolate-to-isolate IPC to accurately classify sneaky SEO sales pitches, crypto phishing, and bot submissions without false-positiving legitimate leads.
+* **Fail-Safe Resilience:** If the Sys1Pop isolate times out or errors, FreeFormer gracefully falls back to native heuristic verdicts without interrupting form submission.
+
+### Enabling Sys1Pop in `wrangler.toml`
+
+To activate edge neural triage in production, uncomment the service binding in `wrangler.toml`:
+
+```toml
+# Optional Edge AI Classification Service Binding (Sys1Pop)
+[[services]]
+binding = "SYS1POP"
+service = "sys1pop"
+```
+
+Then deploy FreeFormer:
+
+```bash
+npm run deploy
+```
+
+For custom model training, distillation, and R2 bundle export workflows, see the [Training Documentation](training/README.md).
 
 ---
 

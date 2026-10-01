@@ -26,8 +26,11 @@ RATE_LIMIT_WINDOW = "60"
 # Spam Detection Configuration
 SPAM_DETECTION_ENABLED = "true"
 SPAM_THRESHOLD = "60"
+SPAM_CATEGORIES = "all"
 SPAM_HONEYPOT_FIELDS = "_hp,website,company_url"
 SPAM_DIGEST_ENABLED = "true"
+SPAM_DIGEST_MODE = "comprehensive"
+SYS1POP_MODEL = "spam-detector-v1"
 
 # Default Storage Engine (options: kv, d1, none)
 STORAGE_ENGINE = "kv"
@@ -45,6 +48,11 @@ EMAIL_PROVIDER = "none"
 # database_name = "freeformer-db"
 # database_id = "YOUR_DATABASE_ID"
 
+# Optional Edge AI Classification Service Binding (Sys1Pop)
+# [[services]]
+# binding = "SYS1POP"
+# service = "sys1pop"
+
 # Production Secrets (Set via: npx wrangler secret put SECRET_NAME)
 # - TURNSTILE_SECRET_KEY (Required)
 # - API_KEY (Required for GET /submissions)
@@ -52,6 +60,7 @@ EMAIL_PROVIDER = "none"
 # - EMAIL_FROM (Required if EMAIL_PROVIDER != "none" or "console")
 # - EMAIL_TO (Required if EMAIL_PROVIDER != "none" or "console")
 # - WEBHOOK_URL (Optional webhook trigger)
+# - SYS1POP_API_TOKEN (Optional Bearer token for Sys1Pop authentication)
 
 
 [observability]

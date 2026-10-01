@@ -1,6 +1,4 @@
-/**
- * FreeFormer Spam Detection & Telemetry Types
- */
+import type { SpamCategory } from './keywords';
 
 export interface SpamMetrics {
   linkCount: number;
@@ -13,6 +11,7 @@ export interface SpamMetrics {
   turnstileScore?: number;
   turnstileElapsedSeconds?: number;
   keywordMatches: string[];
+  categoryMatches?: string[];
 }
 
 export interface SpamAnalysisResult {
@@ -23,10 +22,12 @@ export interface SpamAnalysisResult {
   reasons: string[];
   metrics: SpamMetrics;
   analyzedAt: string; // ISO-8601
+  appliedCategories?: SpamCategory[];
 }
 
 export interface SpamEvaluationOptions {
   threshold?: number;
+  categories?: SpamCategory[] | string[] | string;
   honeypotFields?: string[];
   customKeywords?: string[];
   clientIp?: string;
@@ -50,6 +51,21 @@ export interface SpamDigestItem {
   snippet: string;
 }
 
+export interface DigestLegitItem {
+  id: string;
+  siteId: string;
+  formId: string;
+  timestamp: string;
+  senderName?: string;
+  senderEmail?: string;
+  snippet: string;
+}
+
+export interface DigestQuestionableSpamItem extends SpamDigestItem {
+  borderlineScore: number;
+  confidenceTier: 'borderline' | 'moderate';
+}
+
 export interface SpamDigestData {
   periodStart: string;
   periodEnd: string;
@@ -57,6 +73,21 @@ export interface SpamDigestData {
   spamSubmissions: number;
   cleanSubmissions: number;
   spamPercentage: string;
+
+  // Legitimate Inquiries
+  hasLegitItems?: boolean;
+  isDeduplicatedList?: boolean;
+  earliestLegitItems?: DigestLegitItem[]; // "Ensure Follow-up" (first 5)
+  latestLegitItems?: DigestLegitItem[];   // "Recent Reminder" (last 5)
+  allLegitItems?: DigestLegitItem[];     // Single unified list when total <= 10
+
+  // Questionable / Borderline Spam
+  hasQuestionableSpam?: boolean;
+  questionableSpamItems?: DigestQuestionableSpamItem[];
+  highConfidenceSpamCount?: number;
+
+  // Backwards compatibility for existing templates/tests
   items: SpamDigestItem[];
   adminUrl?: string;
 }
+

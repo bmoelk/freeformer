@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { verifyTurnstile } from './turnstile';
-import { storeSubmission, getSubmissions, getSubmission } from './storage';
+import { storeSubmission, getSubmissions, getSubmission, updateSubmissionMetadata } from './storage';
 import { checkRateLimit } from './ratelimit';
 import { sendEmailNotification, type EmailConfig } from './email';
 import { createLogger, type Logger } from './logger';
@@ -18,11 +18,15 @@ import { adminApp } from './admin';
 import { evaluateSpam } from './spam/detector';
 import { generateAndSendSpamDigest } from './spam/digest';
 import { type SpamAnalysisResult } from './spam/types';
+import { evaluateWithSys1Pop, probeSys1Pop } from './spam/sys1pop';
 
 type Bindings = {
     KV?: KVNamespace;
     DB?: D1Database;
     ATTACHMENTS?: R2Bucket;
+    SYS1POP?: Fetcher | string;
+    SYS1POP_MODEL?: string;
+    SYS1POP_API_TOKEN?: string;
     ENVIRONMENT?: string;
     LOG_LEVEL?: string;
     STORAGE_ENGINE?: string;
@@ -35,10 +39,12 @@ type Bindings = {
     RATE_LIMIT_WINDOW?: string;
     SPAM_DETECTION_ENABLED?: string;
     SPAM_THRESHOLD?: string;
+    SPAM_CATEGORIES?: string;
     SPAM_HONEYPOT_FIELDS?: string;
     SPAM_KEYWORDS?: string;
     SPAM_DIGEST_ENABLED?: string;
     SPAM_DIGEST_SCHEDULE?: string;
+    SPAM_DIGEST_MODE?: string;
     SPAM_DIGEST_EMAIL_TO?: string;
     EMAIL_PROVIDER?: string;
     EMAIL_API_KEY?: string;
@@ -91,6 +97,20 @@ export function resolveSiteEnv(
         if (envRecord[key]) return envRecord[key];
     }
     return undefined;
+}
+
+export function resolveSiteId(originOrReferer?: string, explicitSiteId?: string): string {
+    if (explicitSiteId && typeof explicitSiteId === 'string' && explicitSiteId.trim()) {
+        return explicitSiteId.trim().toLowerCase();
+    }
+    if (originOrReferer) {
+        try {
+            return new URL(originOrReferer).hostname.replace(/^www\./i, '').toLowerCase();
+        } catch {
+            // Invalid URL format, fallback to default
+        }
+    }
+    return 'default';
 }
 
 const app = new Hono<{ Bindings: Bindings }>();
@@ -171,7 +191,7 @@ app.use('/*', async (c, next) => {
 });
 
 // Health check endpoint with safe configuration diagnostic status
-app.get('/', (c) => {
+app.get('/', async (c) => {
     const knownPrefixes = [
         'STORAGE_ENGINE',
         'TURNSTILE_SECRET_KEY',
@@ -200,6 +220,9 @@ app.get('/', (c) => {
         'SPAM_DIGEST_ENABLED',
         'SPAM_DIGEST_SCHEDULE',
         'SPAM_DIGEST_EMAIL_TO',
+        'SYS1POP',
+        'SYS1POP_MODEL',
+        'SYS1POP_API_TOKEN',
     ];
 
     const envObj = (c.env || {}) as Record<string, any>;
@@ -212,17 +235,28 @@ app.get('/', (c) => {
     const kvBound = !!(c.env.KV && typeof c.env.KV.get === 'function');
     const d1Bound = !!(c.env.DB && typeof c.env.DB.prepare === 'function');
     const r2Bound = !!(c.env.ATTACHMENTS && typeof c.env.ATTACHMENTS.get === 'function');
+    const sys1popBound = !!(c.env.SYS1POP && (typeof c.env.SYS1POP === 'string' || typeof (c.env.SYS1POP as any).fetch === 'function'));
 
     const configuredKeys = Array.from(new Set([
         ...stringKeys,
         ...(kvBound ? ['KV'] : []),
         ...(d1Bound ? ['DB'] : []),
         ...(r2Bound ? ['ATTACHMENTS'] : []),
+        ...(sys1popBound ? ['SYS1POP'] : []),
     ]));
 
     const storageEngine = (c.env.STORAGE_ENGINE || (d1Bound ? 'd1' : kvBound ? 'kv' : 'none')).toLowerCase();
     const storageConfigured = storageEngine === 'd1' ? d1Bound : storageEngine === 'kv' ? kvBound : false;
     const logger = createLogger(c.env as Record<string, string | undefined>);
+
+    let sys1popProbe;
+    if (c.req.query('probe') === 'sys1pop' || c.req.query('probe') === 'all') {
+        const probeSiteId = resolveSiteId(c.req.header('origin') || c.req.header('referer'), c.req.query('siteId'));
+        const sys1Target = resolveSiteEnv(envObj, 'SYS1POP', probeSiteId) || c.env.SYS1POP;
+        const sys1Model = resolveSiteEnv(envObj, 'SYS1POP_MODEL', probeSiteId) || 'spam-detector-v1';
+        const sys1Token = resolveSiteEnv(envObj, 'SYS1POP_API_TOKEN', probeSiteId);
+        sys1popProbe = await probeSys1Pop(sys1Target, probeSiteId, sys1Model, sys1Token);
+    }
 
     return c.json({
         service: 'FreeFormer',
@@ -248,8 +282,12 @@ app.get('/', (c) => {
             spamDetectionEnabled: c.env.SPAM_DETECTION_ENABLED !== 'false',
             spamThreshold: parseInt(c.env.SPAM_THRESHOLD || '60', 10),
             spamDigestEnabled: c.env.SPAM_DIGEST_ENABLED !== 'false',
+            sys1popConfigured: !!(c.env.SYS1POP || Object.keys(c.env).some(k => k === 'SYS1POP' || k.startsWith('SYS1POP_'))),
+            sys1popModel: c.env.SYS1POP_MODEL || 'spam-detector-v1',
+            sys1popTokenConfigured: !!(c.env.SYS1POP_API_TOKEN || Object.keys(c.env).some(k => k.startsWith('SYS1POP_API_TOKEN_'))),
             configuredKeys,
         },
+        ...(sys1popProbe ? { sys1popProbe } : {}),
         timestamp: new Date().toISOString(),
     });
 });
@@ -511,6 +549,10 @@ app.post('/submit', async (c) => {
             const spamThresholdRaw = resolveSiteEnv(envRecord, 'SPAM_THRESHOLD', resolvedSiteId) || c.env.SPAM_THRESHOLD || '60';
             const spamThreshold = parseInt(spamThresholdRaw, 10) || 60;
 
+            const spamCategoriesRaw = resolveSiteEnv(envRecord, 'SPAM_CATEGORIES', resolvedSiteId) ||
+                c.env.SPAM_CATEGORIES ||
+                'all';
+
             const honeypotFieldsRaw = resolveSiteEnv(envRecord, 'SPAM_HONEYPOT_FIELDS', resolvedSiteId) ||
                 c.env.SPAM_HONEYPOT_FIELDS || '';
             const customHoneypots = honeypotFieldsRaw
@@ -525,6 +567,7 @@ app.post('/submit', async (c) => {
 
             spamAnalysis = evaluateSpam(data, {
                 threshold: spamThreshold,
+                categories: spamCategoriesRaw,
                 honeypotFields: customHoneypots,
                 customKeywords,
                 clientIp: clientIP,
@@ -533,18 +576,6 @@ app.post('/submit', async (c) => {
             });
 
             isSpam = spamAnalysis.isSpam;
-
-            if (isSpam) {
-                logger.warn(
-                    'Spam',
-                    `QUARANTINED | Site: "${resolvedSiteId}" | Score: ${spamAnalysis.score}/${spamAnalysis.threshold} | Reasons: [${spamAnalysis.reasons.join('; ')}]`
-                );
-            } else {
-                logger.debug(
-                    'Spam',
-                    `PASSED | Site: "${resolvedSiteId}" | Score: ${spamAnalysis.score}/${spamAnalysis.threshold}`
-                );
-            }
         }
 
         // Prepare submission data
@@ -573,15 +604,15 @@ app.post('/submit', async (c) => {
             if (!c.env.DB) {
                 logger.error('Storage', "STORAGE_ENGINE is set to 'd1', but D1 database binding 'DB' is missing in Wrangler!");
             }
-            await storeSubmission(submissionData, undefined, c.env.DB, logger);
+            await storeSubmission({ ...submissionData, id: submissionId }, undefined, c.env.DB, logger);
         } else if (storageEngine === 'kv') {
             if (!c.env.KV) {
                 logger.error('Storage', "STORAGE_ENGINE is set to 'kv', but KV namespace binding 'KV' is missing in Wrangler!");
             }
-            await storeSubmission(submissionData, c.env.KV, undefined, logger);
+            await storeSubmission({ ...submissionData, id: submissionId }, c.env.KV, undefined, logger);
         } else {
             // 'none': process without persistence
-            await storeSubmission(submissionData, undefined, undefined, logger);
+            await storeSubmission({ ...submissionData, id: submissionId }, undefined, undefined, logger);
         }
 
         // Dynamic Per-Site Email & Webhook Resolution (supports domains, prefixes, and global fallbacks):
@@ -593,7 +624,7 @@ app.post('/submit', async (c) => {
         const resolvedMailtrapInboxId = resolveSiteEnv(envRecord, 'MAILTRAP_INBOX_ID', resolvedSiteId);
         const resolvedZohoApiUrl = resolveSiteEnv(envRecord, 'ZOHO_API_URL', resolvedSiteId);
 
-        // Send email notification (if configured and not quarantined as spam)
+        // Configure outbound email
         const emailConfig: EmailConfig = {
             provider: resolvedEmailProvider,
             apiKey: resolvedEmailApiKey,
@@ -606,51 +637,108 @@ app.post('/submit', async (c) => {
             protectedFields: resolvedProtectedFields,
         };
 
-        if (isSpam) {
-            logger.info('Email', `Suppressed: Submission ${submissionId} quarantined as spam (Score: ${spamAnalysis?.score}/${spamAnalysis?.threshold})`);
-        } else if (emailConfig.provider !== 'none') {
-            if (!emailConfig.to || !emailConfig.from) {
-                logger.warn('Email', `Skipped: Missing EMAIL_TO ("${emailConfig.to}") or EMAIL_FROM ("${emailConfig.from}") for siteId: "${resolvedSiteId}"`);
-            } else {
-                const emailPromise = sendEmailNotification(emailConfig, {
-                    ...submissionData,
-                    submissionId,
-                }, logger)
-                    .then((result) => {
-                        if (result && !result.success) {
-                            logger.error('Email', `Dispatch failed: ${result.error}`);
-                        } else {
-                            logger.info('Email', `Dispatch complete for site "${resolvedSiteId}" via ${emailConfig.provider}`);
-                        }
-                    })
-                    .catch((error) => {
-                        logger.error('Email', 'Dispatch exception', error);
-                    });
-                c.executionCtx.waitUntil(emailPromise);
-            }
-        } else {
-            logger.debug('Email', `Provider resolved to "none" for siteId: "${resolvedSiteId}"`);
-        }
-
-        // Send universal webhook (if configured)
         const webhookUrl = resolveSiteEnv(envRecord, 'WEBHOOK_URL', resolvedSiteId);
+        const webhookSecret = resolveSiteEnv(envRecord, 'WEBHOOK_SECRET', resolvedSiteId) || c.env.API_KEY || '';
+        const signedUrlTtl = parseInt(c.env.SIGNED_URL_TTL_SECONDS || '900', 10);
+        const workerOrigin = new URL(c.req.url).origin;
 
-        if (webhookUrl) {
-            const webhookSecret = resolveSiteEnv(envRecord, 'WEBHOOK_SECRET', resolvedSiteId) || c.env.API_KEY || '';
-            const signedUrlTtl = parseInt(c.env.SIGNED_URL_TTL_SECONDS || '900', 10);
-            const workerOrigin = new URL(c.req.url).origin;
+        // Decoupled Background Task: Asynchronous neural triage (Sys1Pop) & event dispatching
+        const backgroundTask = async () => {
+            let currentIsSpam = isSpam;
+            let currentSpamAnalysis = spamAnalysis;
+            const spamThreshold = spamAnalysis?.threshold || 60;
 
-            const webhookPromise = buildWebhookPayload(
-                { ...submissionData, submissionId },
-                workerOrigin,
-                webhookSecret,
-                signedUrlTtl
-            ).then((payload) => dispatchWebhook(webhookUrl, payload, webhookSecret, logger))
-             .catch((err) => {
-                logger.error('Webhook', 'Webhook dispatch exception', err);
-             });
+            // Optional Progressive Enhancement: If Sys1Pop is configured, evaluate ambiguous submissions in background
+            const sys1Target = resolveSiteEnv(envRecord, 'SYS1POP', resolvedSiteId) || c.env.SYS1POP;
+            if (sys1Target && !currentIsSpam && currentSpamAnalysis && currentSpamAnalysis.score >= 30) {
+                try {
+                    const sys1Model = resolveSiteEnv(envRecord, 'SYS1POP_MODEL', resolvedSiteId) || 'spam-detector-v1';
+                    const sys1Token = resolveSiteEnv(envRecord, 'SYS1POP_API_TOKEN', resolvedSiteId);
+                    const sys1Verdict = await evaluateWithSys1Pop(sys1Target, data, resolvedSiteId, sys1Model, sys1Token);
+                    if (sys1Verdict?.isSpam) {
+                        currentIsSpam = true;
+                        currentSpamAnalysis.isSpam = true;
+                        currentSpamAnalysis.score = Math.max(currentSpamAnalysis.score, spamThreshold);
+                        currentSpamAnalysis.reasons.push(
+                            `SYS1POP_NEURAL_SPAM: Classified as "${sys1Verdict.category}" with risk score ${sys1Verdict.riskScore}`
+                        );
 
-            c.executionCtx.waitUntil(webhookPromise);
+                        // Update stored submission metadata asynchronously
+                        await updateSubmissionMetadata(
+                            submissionId,
+                            resolvedSiteId,
+                            formId,
+                            (prev) => ({
+                                ...prev,
+                                isSpam: true,
+                                spamScore: currentSpamAnalysis?.score,
+                                spam: currentSpamAnalysis,
+                                sys1popVerdict: sys1Verdict,
+                            }),
+                            c.env.KV,
+                            c.env.DB,
+                            logger
+                        );
+                    }
+                } catch (err) {
+                    logger.error('Sys1Pop', 'Error during asynchronous Sys1Pop evaluation', err);
+                }
+            }
+
+            if (currentIsSpam) {
+                logger.warn(
+                    'Spam',
+                    `QUARANTINED | Site: "${resolvedSiteId}" | Score: ${currentSpamAnalysis?.score}/${currentSpamAnalysis?.threshold} | Reasons: [${currentSpamAnalysis?.reasons.join('; ')}]`
+                );
+                logger.info('Email', `Suppressed: Submission ${submissionId} quarantined as spam (Score: ${currentSpamAnalysis?.score}/${currentSpamAnalysis?.threshold})`);
+            } else {
+                logger.debug(
+                    'Spam',
+                    `PASSED | Site: "${resolvedSiteId}" | Score: ${currentSpamAnalysis?.score}/${currentSpamAnalysis?.threshold}`
+                );
+
+                // Send email notification (if configured and clean)
+                if (emailConfig.provider !== 'none') {
+                    if (!emailConfig.to || !emailConfig.from) {
+                        logger.warn('Email', `Skipped: Missing EMAIL_TO ("${emailConfig.to}") or EMAIL_FROM ("${emailConfig.from}") for siteId: "${resolvedSiteId}"`);
+                    } else {
+                        try {
+                            const emailResult = await sendEmailNotification(emailConfig, {
+                                ...submissionData,
+                                submissionId,
+                            }, logger);
+                            if (emailResult && !emailResult.success) {
+                                logger.error('Email', `Dispatch failed: ${emailResult.error}`);
+                            } else {
+                                logger.info('Email', `Dispatch complete for site "${resolvedSiteId}" via ${emailConfig.provider}`);
+                            }
+                        } catch (error) {
+                            logger.error('Email', 'Dispatch exception', error);
+                        }
+                    }
+                }
+
+                // Send universal webhook (if configured)
+                if (webhookUrl) {
+                    try {
+                        const payload = await buildWebhookPayload(
+                            { ...submissionData, submissionId },
+                            workerOrigin,
+                            webhookSecret,
+                            signedUrlTtl
+                        );
+                        await dispatchWebhook(webhookUrl, payload, webhookSecret, logger);
+                    } catch (err) {
+                        logger.error('Webhook', 'Webhook dispatch exception', err);
+                    }
+                }
+            }
+        };
+
+        if (c.executionCtx?.waitUntil) {
+            c.executionCtx.waitUntil(backgroundTask());
+        } else {
+            await backgroundTask();
         }
 
         logger.info('Submit', `Processed submission ${submissionId} for site "${resolvedSiteId}"`);
@@ -864,6 +952,40 @@ app.post('/email-test', async (c) => {
             },
             500
         );
+    }
+});
+
+// Test Sys1Pop neural edge decision engine connection & model triage
+app.all('/sys1pop-test', async (c) => {
+    const logger = createLogger(c.env as Record<string, string | undefined>);
+    try {
+        const querySiteId = c.req.query('siteId');
+        const headerOrigin = c.req.header('origin') || c.req.header('referer');
+        const resolvedSiteId = resolveSiteId(headerOrigin, querySiteId);
+
+        const envRecord = c.env as Record<string, string | undefined>;
+        const sys1Model = resolveSiteEnv(envRecord, 'SYS1POP_MODEL', resolvedSiteId) || 'spam-detector-v1';
+        const sys1Token = resolveSiteEnv(envRecord, 'SYS1POP_API_TOKEN', resolvedSiteId);
+
+        const sys1Target = resolveSiteEnv(envRecord, 'SYS1POP', resolvedSiteId) || c.env.SYS1POP;
+        const probe = await probeSys1Pop(sys1Target, resolvedSiteId, sys1Model, sys1Token);
+
+        const statusCode = probe.success ? 200 : probe.configured ? 502 : 404;
+        return c.json({
+            service: 'FreeFormer',
+            target: 'Sys1Pop',
+            siteId: resolvedSiteId,
+            ...probe,
+        }, statusCode as any);
+    } catch (error) {
+        logger.error('API', 'Error testing Sys1Pop connection', error);
+        return c.json({
+            service: 'FreeFormer',
+            target: 'Sys1Pop',
+            success: false,
+            error: 'Internal server error during Sys1Pop probe',
+            details: error instanceof Error ? error.message : String(error)
+        }, 500);
     }
 });
 
@@ -1097,7 +1219,7 @@ export default {
         const result = await generateAndSendSpamDigest(
             { kv: env.KV, db: env.DB },
             emailConfig,
-            { days: 7 },
+            { days: 7, mode: (env.SPAM_DIGEST_MODE as any) || 'comprehensive' },
             logger
         );
 

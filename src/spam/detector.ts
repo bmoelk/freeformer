@@ -9,7 +9,11 @@ import {
   type SpamEvaluationOptions,
   type SpamMetrics,
 } from './types';
-import { SPAM_PATTERNS } from './keywords';
+import {
+  SPAM_PATTERNS,
+  normalizeSpamCategories,
+  type SpamCategory,
+} from './keywords';
 import { isDisposableEmail, hasSuspiciousTld } from './disposable-domains';
 
 export const SPAM_ENGINE_VERSION = '1.0.0';
@@ -41,6 +45,9 @@ export function evaluateSpam(
     ? options.honeypotFields
     : DEFAULT_HONEYPOT_FIELDS;
 
+  const activeCategories = normalizeSpamCategories(options.categories);
+  const appliedCategories = Array.from(activeCategories);
+
   let rawScore = 0;
   const reasons: string[] = [];
 
@@ -51,6 +58,7 @@ export function evaluateSpam(
     disposableEmail: false,
     suspiciousTld: false,
     keywordMatches: [],
+    categoryMatches: [],
   };
 
   // 1. Check Honeypot Fields
@@ -200,8 +208,14 @@ export function evaluateSpam(
 
   // 7. Spam Keyword & Pattern Analysis
   for (const pattern of SPAM_PATTERNS) {
+    if (!activeCategories.has(pattern.category)) {
+      continue;
+    }
     if (pattern.regex.test(allText)) {
       metrics.keywordMatches.push(pattern.name);
+      if (metrics.categoryMatches && !metrics.categoryMatches.includes(pattern.category)) {
+        metrics.categoryMatches.push(pattern.category);
+      }
       rawScore += pattern.weight;
       reasons.push(`SPAM_PATTERN: Matched "${pattern.name}" (+${pattern.weight})`);
     }
@@ -248,5 +262,6 @@ export function evaluateSpam(
     reasons,
     metrics,
     analyzedAt: new Date().toISOString(),
+    appliedCategories,
   };
 }

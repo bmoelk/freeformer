@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { evaluateSpam, SPAM_ENGINE_VERSION } from './spam/detector';
+import { ALL_SPAM_CATEGORIES, normalizeSpamCategories } from './spam/keywords';
 import { isDisposableEmail, hasSuspiciousTld } from './spam/disposable-domains';
 import { generateAndSendSpamDigest } from './spam/digest';
 import { generateDigestHTML, generateDigestTEXT } from './templates';
@@ -304,6 +305,224 @@ describe('FreeFormer Spam Detection Engine', () => {
       expect(text).toContain('FREEFORMER SPAM DIGEST');
       expect(text).toContain('Quarantined Spam: 2');
       expect(text).toContain('spambot@mailinator.com');
+    });
+  });
+
+  describe('Configurable Spam Categories', () => {
+    const seoMessage = 'Boost your website with high authority backlinks and guest posts to rank #1 on google.';
+    const cryptoMessage = 'URGENT: Connect your wallet to validate your account and receive airdrop tokens USDT bonus.';
+
+    it('defaults to evaluating all categories when categories option is omitted', () => {
+      const resultSeo = evaluateSpam({ name: 'Marketer', email: 'seo@agency.com', message: seoMessage });
+      expect(resultSeo.metrics.keywordMatches.length).toBeGreaterThan(0);
+      expect(resultSeo.appliedCategories).toEqual(expect.arrayContaining(ALL_SPAM_CATEGORIES as unknown as any[]));
+
+      const resultCrypto = evaluateSpam({ name: 'Trader', email: 'crypto@agency.com', message: cryptoMessage });
+      expect(resultCrypto.metrics.keywordMatches.length).toBeGreaterThan(0);
+    });
+
+    it('evaluates only selected categories when categories option is provided', () => {
+      // Only evaluate crypto: SEO message should NOT trigger keyword matches
+      const seoResult = evaluateSpam(
+        { name: 'Marketer', email: 'seo@agency.com', message: seoMessage },
+        { categories: ['crypto'] }
+      );
+      expect(seoResult.metrics.keywordMatches).toEqual([]);
+      expect(seoResult.appliedCategories).toEqual(['crypto']);
+
+      // But crypto message should trigger keyword matches
+      const cryptoResult = evaluateSpam(
+        { name: 'Trader', email: 'crypto@agency.com', message: cryptoMessage },
+        { categories: ['crypto'] }
+      );
+      expect(cryptoResult.metrics.keywordMatches.length).toBeGreaterThan(0);
+      expect(cryptoResult.metrics.categoryMatches).toContain('crypto');
+    });
+
+    it('supports comma-separated string categories', () => {
+      const result = evaluateSpam(
+        { name: 'Trader', email: 'crypto@agency.com', message: cryptoMessage },
+        { categories: 'crypto, phishing' }
+      );
+      expect(result.appliedCategories).toEqual(expect.arrayContaining(['crypto', 'phishing']));
+      expect(result.metrics.categoryMatches).toContain('crypto');
+    });
+
+    it('supports category aliases (pharma and adult -> pharma_adult)', () => {
+      const active = normalizeSpamCategories('pharma, adult');
+      expect(active.has('pharma_adult')).toBe(true);
+      expect(active.size).toBe(1);
+
+      const pharmaResult = evaluateSpam(
+        { name: 'Pills', email: 'pills@meds.com', message: 'Buy cheap viagra and cialis online no prescription required.' },
+        { categories: 'pharma' }
+      );
+      expect(pharmaResult.metrics.keywordMatches).toContain('Pharma Spam');
+      expect(pharmaResult.appliedCategories).toContain('pharma_adult');
+    });
+
+    it('supports "none" to disable all keyword pattern checking', () => {
+      const result = evaluateSpam(
+        { name: 'Trader', email: 'crypto@agency.com', message: cryptoMessage },
+        { categories: 'none' }
+      );
+      expect(result.appliedCategories).toEqual([]);
+      expect(result.metrics.keywordMatches).toEqual([]);
+      expect(result.score).toBe(0);
+    });
+
+    it('gracefully handles unknown categories and filters them out', () => {
+      const active = normalizeSpamCategories(['unknown_category', 'crypto']);
+      expect(active.has('crypto')).toBe(true);
+      expect(active.size).toBe(1);
+    });
+  });
+
+  describe('Comprehensive Weekly Digest v2', () => {
+    it('sends digest in comprehensive mode even when 0 spam exists (features legit inquiries)', async () => {
+      const mockDb = {
+        prepare: () => ({
+          bind: () => ({
+            all: async () => ({
+              results: [
+                {
+                  id: 'sub_1',
+                  form_id: 'contact',
+                  site_id: 'splitphase.io',
+                  data: JSON.stringify({ name: 'Legit Client', email: 'client@example.com', message: 'Inquiring about project' }),
+                  metadata: JSON.stringify({ isSpam: false }),
+                  created_at: new Date().toISOString(),
+                },
+              ],
+            }),
+          }),
+        }),
+      };
+
+      const emailConfig: any = { provider: 'console', to: 'alerts@example.com' };
+      const result = await generateAndSendSpamDigest(
+        { db: mockDb as any },
+        emailConfig,
+        { days: 7, mode: 'comprehensive' }
+      );
+
+      expect(result.sent).toBe(true);
+      expect(result.count).toBe(1);
+      expect(result.digestData?.cleanSubmissions).toBe(1);
+      expect(result.digestData?.spamSubmissions).toBe(0);
+      expect(result.digestData?.hasLegitItems).toBe(true);
+      expect(result.digestData?.isDeduplicatedList).toBe(true);
+    });
+
+    it('suppresses digest in comprehensive mode when 0 total submissions exist', async () => {
+      const mockDb = {
+        prepare: () => ({
+          bind: () => ({
+            all: async () => ({ results: [] }),
+          }),
+        }),
+      };
+
+      const emailConfig: any = { provider: 'console', to: 'alerts@example.com' };
+      const result = await generateAndSendSpamDigest(
+        { db: mockDb as any },
+        emailConfig,
+        { days: 7, mode: 'comprehensive' }
+      );
+
+      expect(result.sent).toBe(false);
+      expect(result.reason).toBe('no_submissions');
+      expect(result.count).toBe(0);
+    });
+
+    it('partitions legitimate inquiries into earliest 5 and latest 5 when > 10 clean inquiries exist', async () => {
+      const results: any[] = [];
+      const now = Date.now();
+      for (let i = 0; i < 12; i++) {
+        results.push({
+          id: `sub_${i}`,
+          form_id: 'contact',
+          site_id: 'splitphase.io',
+          data: JSON.stringify({ name: `User ${i}`, email: `user${i}@example.com`, message: `Message ${i}` }),
+          metadata: JSON.stringify({ isSpam: false, timestamp: new Date(now + i * 1000).toISOString() }),
+          created_at: new Date(now + i * 1000).toISOString(),
+        });
+      }
+
+      const mockDb = {
+        prepare: () => ({
+          bind: () => ({
+            all: async () => ({ results }),
+          }),
+        }),
+      };
+
+      const emailConfig: any = { provider: 'console', to: 'alerts@example.com' };
+      const result = await generateAndSendSpamDigest(
+        { db: mockDb as any },
+        emailConfig,
+        { days: 7, mode: 'comprehensive' }
+      );
+
+      expect(result.sent).toBe(true);
+      expect(result.digestData?.isDeduplicatedList).toBe(false);
+      expect(result.digestData?.earliestLegitItems?.length).toBe(5);
+      expect(result.digestData?.latestLegitItems?.length).toBe(5);
+      expect(result.digestData?.earliestLegitItems?.[0].senderEmail).toBe('user0@example.com');
+      expect(result.digestData?.latestLegitItems?.[4].senderEmail).toBe('user11@example.com');
+    });
+
+    it('spotlights questionable / borderline spam closest to threshold', async () => {
+      const results: any[] = [
+        // Borderline spam (scores 65, 70)
+        {
+          id: 'sub_borderline_1',
+          form_id: 'contact',
+          site_id: 'splitphase.io',
+          data: JSON.stringify({ name: 'Borderline 1', email: 'b1@example.com', message: 'Mild promo' }),
+          metadata: JSON.stringify({ isSpam: true, spam: { score: 65, reasons: ['MILD_PROMO (+65)'] } }),
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: 'sub_borderline_2',
+          form_id: 'contact',
+          site_id: 'splitphase.io',
+          data: JSON.stringify({ name: 'Borderline 2', email: 'b2@example.com', message: 'Moderate promo' }),
+          metadata: JSON.stringify({ isSpam: true, spam: { score: 70, reasons: ['MOD_PROMO (+70)'] } }),
+          created_at: new Date().toISOString(),
+        },
+        // Obvious junk (score 95)
+        {
+          id: 'sub_obvious_junk',
+          form_id: 'contact',
+          site_id: 'splitphase.io',
+          data: JSON.stringify({ name: 'Obvious Bot', email: 'bot@spam.com', message: 'Bot flood' }),
+          metadata: JSON.stringify({ isSpam: true, spam: { score: 95, reasons: ['BOT_FLOOD (+95)'] } }),
+          created_at: new Date().toISOString(),
+        },
+      ];
+
+      const mockDb = {
+        prepare: () => ({
+          bind: () => ({
+            all: async () => ({ results }),
+          }),
+        }),
+      };
+
+      const emailConfig: any = { provider: 'console', to: 'alerts@example.com' };
+      const result = await generateAndSendSpamDigest(
+        { db: mockDb as any },
+        emailConfig,
+        { days: 7, mode: 'comprehensive' }
+      );
+
+      expect(result.sent).toBe(true);
+      expect(result.digestData?.hasQuestionableSpam).toBe(true);
+      expect(result.digestData!.questionableSpamItems!.length).toBe(2);
+      expect(result.digestData!.questionableSpamItems![0].score).toBe(65);
+      expect(result.digestData!.questionableSpamItems![1].score).toBe(70);
+      expect(result.digestData?.highConfidenceSpamCount).toBe(1);
     });
   });
 });
